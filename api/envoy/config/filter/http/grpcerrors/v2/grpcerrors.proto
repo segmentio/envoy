@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package envoy.config.filter.http.grpcerrors.v2;
+option go_package = "v2";
+
+import "validate/validate.proto";
+
+// TODO protodoc
+
+message Config {
+  string append = 1;
+}
