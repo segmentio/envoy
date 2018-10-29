@@ -5,8 +5,10 @@ option go_package = "v2";
 
 import "validate/validate.proto";
 
-// TODO protodoc
-
 message Config {
-  string append = 1;
+  // Key to use for error message in response JSON.  Defaults to "error"
+  string error_key = 1;
+
+  // Whether or not to show the grpc error code in the response json.  Defaults to false
+  bool show_grpc_error_code = 2;
 }
