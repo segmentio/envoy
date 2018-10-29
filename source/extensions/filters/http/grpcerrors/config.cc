@@ -18,8 +18,8 @@ Http::FilterFactoryCb GrpcErrorsFilterConfig::createFilterFactoryFromProtoTyped(
   ConfigSharedPtr filter_config(std::make_shared<Config>(proto_config));
 
   return [filter_config](Http::FilterChainFactoryCallbacks& callbacks) -> void {
-    callbacks.addStreamFilter(
-        Http::StreamFilterSharedPtr{new GrpcErrorsFilter(filter_config)});
+    callbacks.addStreamEncoderFilter(
+        Http::StreamEncoderFilterSharedPtr{new GrpcErrorsFilter(filter_config)});
   };
 }
 
