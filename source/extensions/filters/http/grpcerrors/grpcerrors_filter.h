@@ -17,15 +17,17 @@ namespace Envoy {
         public:
           Config(const envoy::config::filter::http::grpcerrors::v2::Config config);
 
-          std::string append() const { return append_; }
+          std::string error_key() const { return error_key_; }
+          bool show_grpc_error_code() const { return show_grpc_error_code_; }
 
         private:
-          std::string append_{"default"};
+          std::string error_key_{"error"};
+          bool show_grpc_error_code_{false};
         };
 
         typedef std::shared_ptr<Config> ConfigSharedPtr;
 
-        class GrpcErrorsFilter : public Http::StreamFilter,
+        class GrpcErrorsFilter : public Http::StreamEncoderFilter,
                                  public Logger::Loggable<Logger::Id::filter> {
         public:
           GrpcErrorsFilter(const ConfigSharedPtr config);
@@ -33,32 +35,24 @@ namespace Envoy {
 
           void onDestroy() override;
 
-          // StreamDecoderFilter
-          Http::FilterHeadersStatus decodeHeaders(Http::HeaderMap& headers, bool) override;
-          Http::FilterDataStatus decodeData(Buffer::Instance&, bool) override;
-
-          Http::FilterTrailersStatus decodeTrailers(Http::HeaderMap&) override;
-
-          void setDecoderFilterCallbacks(Http::StreamDecoderFilterCallbacks& callbacks) override;
-
           // StreamEncoderFilter
           Http::FilterHeadersStatus encode100ContinueHeaders(Http::HeaderMap&) override {
             return Http::FilterHeadersStatus::Continue;
           }
+          Http::FilterDataStatus encodeData(Buffer::Instance&, bool) override {
+            return Http::FilterDataStatus::Continue;
+          }
+          Http::FilterTrailersStatus encodeTrailers(Http::HeaderMap&) override {
+            return Http::FilterTrailersStatus::Continue;
+          }
+          void setEncoderFilterCallbacks(Http::StreamEncoderFilterCallbacks& callbacks) override {
+            encoder_callbacks_ = &callbacks;
+          }
+
           Http::FilterHeadersStatus encodeHeaders(Http::HeaderMap& headers, bool) override;
-          Http::FilterDataStatus encodeData(Buffer::Instance&, bool) override;
-
-          Http::FilterTrailersStatus encodeTrailers(Http::HeaderMap&) override;
-
-          void setEncoderFilterCallbacks(Http::StreamEncoderFilterCallbacks& callbacks) override;
-
-
         private:
           const ConfigSharedPtr config_;
-          Http::StreamDecoderFilterCallbacks* decoder_callbacks_{};
           Http::StreamEncoderFilterCallbacks* encoder_callbacks_{};
-          Http::HeaderMap* response_headers_{nullptr};
-
         };
 
       } // namespace GrpcErrors
