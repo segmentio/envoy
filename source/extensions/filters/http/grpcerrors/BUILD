@@ -1,4 +1,4 @@
-licenses(["notice"]) # Apache 2
+licenses(["notice"])  # Apache 2
 
 load(
     "//bazel:envoy_build_system.bzl",
@@ -14,9 +14,9 @@ envoy_cc_library(
     hdrs = ["grpcerrors_filter.h"],
     deps = [
         "//include/envoy/server:filter_config_interface",
-        "//source/extensions/filters/http:well_known_names",
         "//source/common/grpc:common_lib",
         "//source/common/http:headers_lib",
+        "//source/extensions/filters/http:well_known_names",
         "@envoy_api//envoy/config/filter/http/grpcerrors/v2:grpcerrors_cc",
     ],
 )
