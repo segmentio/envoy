@@ -39,8 +39,13 @@ Http::FilterHeadersStatus GrpcErrorsFilter::encodeHeaders(Http::HeaderMap& heade
       if (http_status_code != 200 && grpc_message_header) {
         ENVOY_LOG(trace, "found non-200 grpc response, copying message to body");
 
-        std::string response = "{\n";
-        response += "  \"";
+        std::string response;
+        response.reserve(24 + // base size of json template
+                         config_->error_key().size() +
+                         grpc_message_header->value().size() +
+                         grpc_status_code ? grpc_status_code->value().size() : 0);
+
+        response += "{\n  \"";
         response += config_->error_key();
         response += "\": \"";
         response += grpc_message_header->value().c_str();
