@@ -29,8 +29,8 @@ void GrpcErrorsFilter::onDestroy() {}
 Http::FilterHeadersStatus GrpcErrorsFilter::encodeHeaders(Http::HeaderMap& headers,
                                                           bool end_stream) {
   if (end_stream) {
-    const Http::HeaderEntry* grpc_message_header = headers.GrpcMessage();
-    const Http::HeaderEntry* grpc_status_code = headers.GrpcStatus();
+    auto grpc_message_header = headers.GrpcMessage();
+    auto grpc_status_code = headers.GrpcStatus();
     if (headers.Status()) {
 
       uint64_t http_status_code{};
