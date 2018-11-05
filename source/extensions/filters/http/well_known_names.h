@@ -48,6 +48,8 @@ public:
   const std::string JwtAuthn = "envoy.filters.http.jwt_authn";
   // Header to metadata filter
   const std::string HeaderToMetadata = "envoy.filters.http.header_to_metadata";
+  // GRPC Errors filter
+  const std::string GrpcErrors = "envoy.filters.http.grpcerrors";
 
   // Converts names from v1 to v2
   const Config::V1Converter v1_converter_;
@@ -56,7 +58,7 @@ public:
   HttpFilterNameValues()
       : v1_converter_({Buffer, Cors, Dynamo, Fault, GrpcHttp1Bridge, GrpcJsonTranscoder, GrpcWeb,
                        HeaderToMetadata, HealthCheck, IpTagging, RateLimit, Router, Lua,
-                       ExtAuthorization}) {}
+                       ExtAuthorization, GrpcErrors}) {}
 };
 
 typedef ConstSingleton<HttpFilterNameValues> HttpFilterNames;
