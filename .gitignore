@@ -6,11 +6,13 @@ BROWSE
 /ci/bazel-*
 /ci/prebuilt/thirdparty
 /ci/prebuilt/thirdparty_build
+compile_commands.json
 cscope.*
 .deps
 /docs/landing_source/.bundle
 /generated
 *.pyc
+**/pyformat
 SOURCE_VERSION
 *.sw*
 tags

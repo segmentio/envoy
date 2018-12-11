@@ -8,11 +8,6 @@
 #include "exe/signal_action.h"
 #endif
 
-const char* __asan_default_options() {
-  static char result[] = {"check_initialization_order=true strict_init_order=true"};
-  return result;
-}
-
 // The main entry point (and the rest of this file) should have no logic in it,
 // this allows overriding by site specific versions of main.cc.
 int main(int argc, char** argv) {
@@ -24,11 +19,11 @@ int main(int argc, char** argv) {
   Envoy::SignalAction handle_sigs;
 #endif
 
-  ::setenv("TEST_RUNDIR",
-           (Envoy::TestEnvironment::getCheckedEnvVar("TEST_SRCDIR") + "/" +
-            Envoy::TestEnvironment::getCheckedEnvVar("TEST_WORKSPACE"))
-               .c_str(),
-           1);
+  Envoy::TestEnvironment::setEnvVar("TEST_RUNDIR",
+                                    (Envoy::TestEnvironment::getCheckedEnvVar("TEST_SRCDIR") + "/" +
+                                     Envoy::TestEnvironment::getCheckedEnvVar("TEST_WORKSPACE")),
+                                    1);
+
   // Select whether to test only for IPv4, IPv6, or both. The default is to
   // test for both. Options are {"v4only", "v6only", "all"}. Set
   // ENVOY_IP_TEST_VERSIONS to "v4only" if the system currently does not support IPv6 network
@@ -36,6 +31,6 @@ int main(int argc, char** argv) {
   // phased out of network operations. Set to "all" (or don't set) if testing both
   // v4 and v6 addresses is desired. This feature is in progress and will be rolled out to all tests
   // in upcoming PRs.
-  ::setenv("ENVOY_IP_TEST_VERSIONS", "all", 0);
+  Envoy::TestEnvironment::setEnvVar("ENVOY_IP_TEST_VERSIONS", "all", 0);
   return Envoy::TestRunner::RunTests(argc, argv);
 }

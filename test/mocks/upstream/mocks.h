@@ -75,6 +75,7 @@ public:
   Common::CallbackManager<uint32_t, const HostVector&, const HostVector&> member_update_cb_helper_;
   uint32_t priority_{};
   uint32_t overprovisioning_factor_{};
+  bool run_in_panic_mode_ = false;
 };
 
 class MockPrioritySet : public PrioritySet {
@@ -102,6 +103,7 @@ public:
 class MockRetryPriority : public RetryPriority {
 public:
   MockRetryPriority(const PriorityLoad& priority_load) : priority_load_(priority_load) {}
+  MockRetryPriority(const MockRetryPriority& other) : priority_load_(other.priority_load_) {}
   ~MockRetryPriority();
 
   const PriorityLoad& determinePriorityLoad(const PrioritySet&, const PriorityLoad&) {
@@ -116,20 +118,19 @@ private:
 
 class MockRetryPriorityFactory : public RetryPriorityFactory {
 public:
-  MockRetryPriorityFactory(RetryPrioritySharedPtr retry_priority)
+  MockRetryPriorityFactory(const MockRetryPriority& retry_priority)
       : retry_priority_(retry_priority) {}
-  void createRetryPriority(RetryPriorityFactoryCallbacks& callbacks, const Protobuf::Message&,
-                           uint32_t) override {
-    callbacks.addRetryPriority(retry_priority_);
+  RetryPrioritySharedPtr createRetryPriority(const Protobuf::Message&, uint32_t) override {
+    return std::make_shared<NiceMock<MockRetryPriority>>(retry_priority_);
   }
 
-  std::string name() const override { return "envoy.mock_retry_priority"; }
+  std::string name() const override { return "envoy.test_retry_priority"; }
   ProtobufTypes::MessagePtr createEmptyConfigProto() override {
     return ProtobufTypes::MessagePtr{new Envoy::ProtobufWkt::Empty()};
   }
 
 private:
-  RetryPrioritySharedPtr retry_priority_;
+  const MockRetryPriority& retry_priority_;
 };
 
 class MockCluster : public Cluster {
@@ -212,11 +213,11 @@ public:
                                      ResourcePriority priority, Http::Protocol protocol,
                                      const Network::ConnectionSocket::OptionsSharedPtr& options));
 
-  MOCK_METHOD4(
-      allocateTcpConnPool,
-      Tcp::ConnectionPool::InstancePtr(Event::Dispatcher& dispatcher, HostConstSharedPtr host,
-                                       ResourcePriority priority,
-                                       const Network::ConnectionSocket::OptionsSharedPtr& options));
+  MOCK_METHOD5(allocateTcpConnPool, Tcp::ConnectionPool::InstancePtr(
+                                        Event::Dispatcher& dispatcher, HostConstSharedPtr host,
+                                        ResourcePriority priority,
+                                        const Network::ConnectionSocket::OptionsSharedPtr& options,
+                                        Network::TransportSocketOptionsSharedPtr));
 
   MOCK_METHOD5(clusterFromProto,
                ClusterSharedPtr(const envoy::api::v2::Cluster& cluster, ClusterManager& cm,
@@ -232,14 +233,26 @@ private:
   NiceMock<Secret::MockSecretManager> secret_manager_;
 };
 
+class MockClusterUpdateCallbacksHandle : public ClusterUpdateCallbacksHandle {
+public:
+  MockClusterUpdateCallbacksHandle();
+  ~MockClusterUpdateCallbacksHandle();
+};
+
 class MockClusterManager : public ClusterManager {
 public:
   explicit MockClusterManager(TimeSource& time_source);
   MockClusterManager();
   ~MockClusterManager();
 
+  ClusterUpdateCallbacksHandlePtr
+  addThreadLocalClusterUpdateCallbacks(ClusterUpdateCallbacks& callbacks) override {
+    return ClusterUpdateCallbacksHandlePtr{addThreadLocalClusterUpdateCallbacks_(callbacks)};
+  }
+
   Host::CreateConnectionData tcpConnForCluster(const std::string& cluster,
-                                               LoadBalancerContext* context) override {
+                                               LoadBalancerContext* context,
+                                               Network::TransportSocketOptionsSharedPtr) override {
     MockHost::MockCreateConnectionData data = tcpConnForCluster_(cluster, context);
     return {Network::ClientConnectionPtr{data.connection_}, data.host_description_};
   }
@@ -256,9 +269,11 @@ public:
                Http::ConnectionPool::Instance*(const std::string& cluster,
                                                ResourcePriority priority, Http::Protocol protocol,
                                                LoadBalancerContext* context));
-  MOCK_METHOD3(tcpConnPoolForCluster,
-               Tcp::ConnectionPool::Instance*(const std::string& cluster, ResourcePriority priority,
-                                              LoadBalancerContext* context));
+  MOCK_METHOD4(tcpConnPoolForCluster,
+               Tcp::ConnectionPool::Instance*(
+                   const std::string& cluster, ResourcePriority priority,
+                   LoadBalancerContext* context,
+                   Network::TransportSocketOptionsSharedPtr transport_socket_options));
   MOCK_METHOD2(tcpConnForCluster_,
                MockHost::MockCreateConnectionData(const std::string& cluster,
                                                   LoadBalancerContext* context));
@@ -270,8 +285,8 @@ public:
   MOCK_METHOD0(grpcAsyncClientManager, Grpc::AsyncClientManager&());
   MOCK_CONST_METHOD0(versionInfo, const std::string());
   MOCK_CONST_METHOD0(localClusterName, const std::string&());
-  MOCK_METHOD1(addThreadLocalClusterUpdateCallbacks,
-               std::unique_ptr<ClusterUpdateCallbacksHandle>(ClusterUpdateCallbacks& callbacks));
+  MOCK_METHOD1(addThreadLocalClusterUpdateCallbacks_,
+               ClusterUpdateCallbacksHandle*(ClusterUpdateCallbacks& callbacks));
 
   NiceMock<Http::ConnectionPool::MockInstance> conn_pool_;
   NiceMock<Http::MockAsyncClient> async_client_;
@@ -308,6 +323,9 @@ public:
                                        envoy::data::core::v2alpha::HealthCheckFailureType));
   MOCK_METHOD3(logAddHealthy, void(envoy::data::core::v2alpha::HealthCheckerType,
                                    const HostDescriptionConstSharedPtr&, bool));
+  MOCK_METHOD4(logUnhealthy, void(envoy::data::core::v2alpha::HealthCheckerType,
+                                  const HostDescriptionConstSharedPtr&,
+                                  envoy::data::core::v2alpha::HealthCheckFailureType, bool));
 };
 
 class MockCdsApi : public CdsApi {
@@ -354,5 +372,37 @@ public:
   MOCK_METHOD1(onHostAttempted, void(HostDescriptionConstSharedPtr));
 };
 
+class MockEdsSubscriptionFactory : public EdsSubscriptionFactory {
+  MOCK_METHOD8(getOrCreateMux,
+               Config::GrpcMux&(const LocalInfo::LocalInfo& local_info,
+                                Grpc::AsyncClientPtr async_client, Event::Dispatcher& dispatcher,
+                                const Protobuf::MethodDescriptor& service_method,
+                                Runtime::RandomGenerator& random,
+                                const ::envoy::api::v2::core::ApiConfigSource& config_source,
+                                Stats::Scope& scope,
+                                const Config::RateLimitSettings& rate_limit_settings));
+
+  MOCK_METHOD9(subscriptionFromConfigSource,
+               std::unique_ptr<Config::Subscription<envoy::api::v2::ClusterLoadAssignment>>(
+                   const envoy::api::v2::core::ConfigSource& config,
+                   const LocalInfo::LocalInfo& local_info, Event::Dispatcher& dispatcher,
+                   Upstream::ClusterManager& cm, Runtime::RandomGenerator& random,
+                   Stats::Scope& scope,
+                   std::function<Config::Subscription<envoy::api::v2::ClusterLoadAssignment>*()>
+                       rest_legacy_constructor,
+                   const std::string& rest_method, const std::string& grpc_method));
+};
+
+class TestRetryHostPredicateFactory : public RetryHostPredicateFactory {
+public:
+  RetryHostPredicateSharedPtr createHostPredicate(const Protobuf::Message&, uint32_t) override {
+    return std::make_shared<NiceMock<MockRetryHostPredicate>>();
+  }
+
+  std::string name() override { return "envoy.test_host_predicate"; }
+  ProtobufTypes::MessagePtr createEmptyConfigProto() override {
+    return ProtobufTypes::MessagePtr{new Envoy::ProtobufWkt::Empty()};
+  }
+};
 } // namespace Upstream
 } // namespace Envoy

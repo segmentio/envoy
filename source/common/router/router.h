@@ -24,8 +24,9 @@
 #include "common/common/logger.h"
 #include "common/config/well_known_names.h"
 #include "common/http/utility.h"
-#include "common/request_info/request_info_impl.h"
 #include "common/router/config_impl.h"
+#include "common/stream_info/stream_info_impl.h"
+#include "common/upstream/load_balancer_impl.h"
 
 namespace Envoy {
 namespace Router {
@@ -97,12 +98,12 @@ public:
                Stats::Scope& scope, Upstream::ClusterManager& cm, Runtime::Loader& runtime,
                Runtime::RandomGenerator& random, ShadowWriterPtr&& shadow_writer,
                bool emit_dynamic_stats, bool start_child_span, bool suppress_envoy_headers,
-               TimeSource& time_source)
+               TimeSource& time_source, Http::Context& http_context)
       : scope_(scope), local_info_(local_info), cm_(cm), runtime_(runtime),
         random_(random), stats_{ALL_ROUTER_STATS(POOL_COUNTER_PREFIX(scope, stat_prefix))},
         emit_dynamic_stats_(emit_dynamic_stats), start_child_span_(start_child_span),
-        suppress_envoy_headers_(suppress_envoy_headers), shadow_writer_(std::move(shadow_writer)),
-        time_source_(time_source) {}
+        suppress_envoy_headers_(suppress_envoy_headers), http_context_(http_context),
+        shadow_writer_(std::move(shadow_writer)), time_source_(time_source) {}
 
   FilterConfig(const std::string& stat_prefix, Server::Configuration::FactoryContext& context,
                ShadowWriterPtr&& shadow_writer,
@@ -111,7 +112,7 @@ public:
                      context.runtime(), context.random(), std::move(shadow_writer),
                      PROTOBUF_GET_WRAPPED_OR_DEFAULT(config, dynamic_stats, true),
                      config.start_child_span(), config.suppress_envoy_headers(),
-                     context.timeSource()) {
+                     context.timeSource(), context.httpContext()) {
     for (const auto& upstream_log : config.upstream_log()) {
       upstream_logs_.push_back(AccessLog::AccessLogFactory::fromProto(upstream_log, context));
     }
@@ -130,6 +131,7 @@ public:
   const bool start_child_span_;
   const bool suppress_envoy_headers_;
   std::list<AccessLog::InstanceSharedPtr> upstream_logs_;
+  Http::Context& http_context_;
 
 private:
   ShadowWriterPtr shadow_writer_;
@@ -166,7 +168,7 @@ public:
       auto hash_policy = route_entry_->hashPolicy();
       if (hash_policy) {
         return hash_policy->generateHash(
-            callbacks_->requestInfo().downstreamRemoteAddress().get(), *downstream_headers_,
+            callbacks_->streamInfo().downstreamRemoteAddress().get(), *downstream_headers_,
             [this](const std::string& key, const std::string& path, std::chrono::seconds max_age) {
               return addDownstreamSetCookie(key, path, max_age);
             });
@@ -184,7 +186,7 @@ public:
       }
 
       // The request's metadata, if present, takes precedence over the route's.
-      const auto& request_metadata = callbacks_->requestInfo().dynamicMetadata().filter_metadata();
+      const auto& request_metadata = callbacks_->streamInfo().dynamicMetadata().filter_metadata();
       const auto filter_it = request_metadata.find(Envoy::Config::MetadataFilters::get().ENVOY_LB);
       if (filter_it != request_metadata.end()) {
         if (route_entry_->metadataMatchCriteria() != nullptr) {
@@ -278,9 +280,9 @@ private:
     void maybeEndDecode(bool end_stream);
 
     void onUpstreamHostSelected(Upstream::HostDescriptionConstSharedPtr host) {
-      request_info_.onUpstreamHostSelected(host);
+      stream_info_.onUpstreamHostSelected(host);
       upstream_host_ = host;
-      parent_.callbacks_->requestInfo().onUpstreamHostSelected(host);
+      parent_.callbacks_->streamInfo().onUpstreamHostSelected(host);
     }
 
     // Http::StreamDecoder
@@ -288,6 +290,7 @@ private:
     void decodeHeaders(Http::HeaderMapPtr&& headers, bool end_stream) override;
     void decodeData(Buffer::Instance& data, bool end_stream) override;
     void decodeTrailers(Http::HeaderMapPtr&& trailers) override;
+    void decodeMetadata(Http::MetadataMapPtr&& metadata_map) override;
 
     // Http::StreamCallbacks
     void onResetStream(Http::StreamResetReason reason) override;
@@ -335,7 +338,7 @@ private:
     Upstream::HostDescriptionConstSharedPtr upstream_host_;
     DownstreamWatermarkManager downstream_watermark_manager_{*this};
     Tracing::SpanPtr span_;
-    RequestInfo::RequestInfoImpl request_info_;
+    StreamInfo::StreamInfoImpl stream_info_;
     Http::HeaderMap* upstream_headers_{};
     Http::HeaderMap* upstream_trailers_{};
 
@@ -349,7 +352,7 @@ private:
 
   enum class UpstreamResetType { Reset, GlobalTimeout, PerTryTimeout };
 
-  RequestInfo::ResponseFlag streamResetReasonToResponseFlag(Http::StreamResetReason reset_reason);
+  StreamInfo::ResponseFlag streamResetReasonToResponseFlag(Http::StreamResetReason reset_reason);
 
   static const std::string upstreamZone(Upstream::HostDescriptionConstSharedPtr upstream_host);
   void chargeUpstreamCode(uint64_t response_status_code, const Http::HeaderMap& response_headers,
@@ -371,6 +374,7 @@ private:
   void onUpstreamHeaders(uint64_t response_code, Http::HeaderMapPtr&& headers, bool end_stream);
   void onUpstreamData(Buffer::Instance& data, bool end_stream);
   void onUpstreamTrailers(Http::HeaderMapPtr&& trailers);
+  void onUpstreamMetadata(Http::MetadataMapPtr&& metadata_map);
   void onUpstreamComplete();
   void onUpstreamReset(UpstreamResetType type,
                        const absl::optional<Http::StreamResetReason>& reset_reason);
@@ -381,6 +385,7 @@ private:
   // and handle difference between gRPC and non-gRPC requests.
   void handleNon5xxResponseHeaders(const Http::HeaderMap& headers, bool end_stream);
   TimeSource& timeSource() { return config_.timeSource(); }
+  Http::Context& httpContext() { return config_.http_context_; }
 
   FilterConfig& config_;
   Http::StreamDecoderFilterCallbacks* callbacks_{};
@@ -398,7 +403,6 @@ private:
   Http::HeaderMap* downstream_trailers_{};
   MonotonicTime downstream_request_complete_time_;
   uint32_t buffer_limit_{0};
-  bool stream_destroyed_{};
   MetadataMatchCriteriaConstPtr metadata_match_;
 
   // list of cookies to add to upstream headers
@@ -408,6 +412,8 @@ private:
   bool downstream_end_stream_ : 1;
   bool do_shadowing_ : 1;
   bool is_retry_ : 1;
+  bool include_attempt_count_ : 1;
+  uint32_t attempt_count_{1};
 };
 
 class ProdFilter : public Filter {

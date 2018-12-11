@@ -34,10 +34,7 @@ makeHermeticPathsAndPorts(Fuzz::PerTestEnvironment& test_env,
   // config_validation_fuzz_test doesn't need to do this sanitization, so should pickup the coverage
   // we lose here. If we don't sanitize here, we get flakes due to port bind conflicts, file
   // conflicts, etc.
-  output.mutable_admin()->set_access_log_path(test_env.temporaryPath("admin.log"));
-  if (output.admin().has_address()) {
-    makePortHermetic(test_env, *output.mutable_admin()->mutable_address());
-  }
+  output.clear_admin();
   if (output.has_runtime()) {
     output.mutable_runtime()->set_symlink_root(test_env.temporaryPath(""));
   }
@@ -65,7 +62,7 @@ DEFINE_PROTO_FUZZER(const envoy::config::bootstrap::v2::Bootstrap& input) {
   DangerousDeprecatedTestTime test_time;
   Fuzz::PerTestEnvironment test_env;
 
-  RELEASE_ASSERT(Envoy::Server::validateProtoDescriptors(), "");
+  RELEASE_ASSERT(validateProtoDescriptors(), "");
 
   {
     const std::string bootstrap_path = test_env.temporaryPath("bootstrap.pb_text");
@@ -82,7 +79,7 @@ DEFINE_PROTO_FUZZER(const envoy::config::bootstrap::v2::Bootstrap& input) {
         options, test_time.timeSystem(),
         std::make_shared<Network::Address::Ipv4Instance>("127.0.0.1"), hooks, restart, stats_store,
         fakelock, component_factory, std::make_unique<Runtime::RandomGeneratorImpl>(),
-        thread_local_instance);
+        thread_local_instance, Thread::threadFactoryForTest());
   } catch (const EnvoyException& ex) {
     ENVOY_LOG_MISC(debug, "Controlled EnvoyException exit: {}", ex.what());
     return;

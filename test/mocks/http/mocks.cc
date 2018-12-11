@@ -68,9 +68,11 @@ MockFilterChainFactory::MockFilterChainFactory() {}
 MockFilterChainFactory::~MockFilterChainFactory() {}
 
 template <class T> static void initializeMockStreamFilterCallbacks(T& callbacks) {
+  callbacks.cluster_info_.reset(new NiceMock<Upstream::MockClusterInfo>());
   callbacks.route_.reset(new NiceMock<Router::MockRoute>());
   ON_CALL(callbacks, dispatcher()).WillByDefault(ReturnRef(callbacks.dispatcher_));
-  ON_CALL(callbacks, requestInfo()).WillByDefault(ReturnRef(callbacks.request_info_));
+  ON_CALL(callbacks, streamInfo()).WillByDefault(ReturnRef(callbacks.stream_info_));
+  ON_CALL(callbacks, clusterInfo()).WillByDefault(Return(callbacks.cluster_info_));
   ON_CALL(callbacks, route()).WillByDefault(Return(callbacks.route_));
 }
 
@@ -167,6 +169,10 @@ MockInstance::~MockInstance() {}
 
 IsSubsetOfHeadersMatcher IsSubsetOfHeaders(const HeaderMap& expected_headers) {
   return IsSubsetOfHeadersMatcher(expected_headers);
+}
+
+IsSupersetOfHeadersMatcher IsSupersetOfHeaders(const HeaderMap& expected_headers) {
+  return IsSupersetOfHeadersMatcher(expected_headers);
 }
 
 } // namespace Http

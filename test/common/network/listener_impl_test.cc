@@ -58,7 +58,6 @@ class ListenerImplDeathTest : public testing::TestWithParam<Address::IpVersion> 
 INSTANTIATE_TEST_CASE_P(IpVersions, ListenerImplDeathTest,
                         testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
                         TestUtility::ipTestParamsToString);
-
 TEST_P(ListenerImplDeathTest, ErrorCallback) {
   EXPECT_DEATH_LOG_TO_STDERR(errorCallbackTest(GetParam()), ".*listener accept failure.*");
 }
@@ -102,6 +101,17 @@ TEST_P(ListenerImplTest, SetListeningSocketOptionsSuccess) {
   EXPECT_CALL(*option, setOption(_, envoy::api::v2::core::SocketOption::STATE_LISTENING))
       .WillOnce(Return(true));
   TestListenerImpl listener(dispatcher_, socket, listener_callbacks, true, false);
+}
+
+// Test that socket options are set after the listener is setup.
+TEST_P(ListenerImplTest, UdpSetListeningSocketOptionsSuccess) {
+  Network::MockListenerCallbacks listener_callbacks;
+  Network::MockConnectionHandler connection_handler;
+
+  Network::UdpListenSocket socket(Network::Test::getCanonicalLoopbackAddress(version_), nullptr,
+                                  true);
+  std::shared_ptr<MockSocketOption> option = std::make_shared<MockSocketOption>();
+  socket.addOption(option);
 }
 
 // Test that an exception is thrown if there is an error setting socket options.
@@ -238,6 +248,45 @@ TEST_P(ListenerImplTest, WildcardListenerIpv4Compat) {
         EXPECT_EQ(*conn->localAddress(), *local_dst_address);
         client_connection->close(ConnectionCloseType::NoFlush);
         conn->close(ConnectionCloseType::NoFlush);
+        dispatcher_.exit();
+      }));
+
+  dispatcher_.run(Event::Dispatcher::RunType::Block);
+}
+
+TEST_P(ListenerImplTest, DisableAndEnableListener) {
+  testing::InSequence s1;
+
+  TcpListenSocket socket(Network::Test::getAnyAddress(version_), nullptr, true);
+  MockListenerCallbacks listener_callbacks;
+  TestListenerImpl listener(dispatcher_, socket, listener_callbacks, true, true);
+
+  // When listener is disabled, the timer should fire before any connection is accepted.
+  listener.disable();
+
+  ClientConnectionPtr client_connection =
+      dispatcher_.createClientConnection(socket.localAddress(), Address::InstanceConstSharedPtr(),
+                                         Network::Test::createRawBufferSocket(), nullptr);
+  client_connection->connect();
+  Event::TimerPtr timer = dispatcher_.createTimer([&] {
+    client_connection->close(ConnectionCloseType::NoFlush);
+    dispatcher_.exit();
+  });
+  timer->enableTimer(std::chrono::milliseconds(2000));
+
+  EXPECT_CALL(listener_callbacks, onAccept_(_, _)).Times(0);
+
+  dispatcher_.run(Event::Dispatcher::RunType::Block);
+
+  // When the listener is re-enabled, the pending connection should be accepted.
+  listener.enable();
+
+  EXPECT_CALL(listener, getLocalAddress(_))
+      .WillOnce(Invoke(
+          [](int fd) -> Address::InstanceConstSharedPtr { return Address::addressFromFd(fd); }));
+  EXPECT_CALL(listener_callbacks, onAccept_(_, _))
+      .WillOnce(Invoke([&](ConnectionSocketPtr&, bool) -> void {
+        client_connection->close(ConnectionCloseType::NoFlush);
         dispatcher_.exit();
       }));
 

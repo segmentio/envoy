@@ -170,6 +170,19 @@ envoy_cc_library(
     name = "grpc_subscription_lib",
     hdrs = ["grpc_subscription_impl.h"],
     deps = [
+        ":grpc_managed_mux_subscription_lib",
+        ":grpc_mux_lib",
+        "//include/envoy/config:subscription_interface",
+        "//include/envoy/event:dispatcher_interface",
+        "//include/envoy/grpc:async_client_interface",
+        "@envoy_api//envoy/api/v2/core:base_cc",
+    ],
+)
+
+envoy_cc_library(
+    name = "grpc_managed_mux_subscription_lib",
+    hdrs = ["grpc_managed_mux_subscription_impl.h"],
+    deps = [
         ":grpc_mux_lib",
         ":grpc_mux_subscription_lib",
         "//include/envoy/config:subscription_interface",
@@ -232,6 +245,9 @@ envoy_cc_library(
     srcs = ["metadata.cc"],
     hdrs = ["metadata.h"],
     deps = [
+        "//include/envoy/config:typed_metadata_interface",
+        "//include/envoy/registry",
+        "//source/common/common:assert_lib",
         "//source/common/protobuf",
         "@envoy_api//envoy/api/v2/core:base_cc",
     ],
@@ -334,6 +350,7 @@ envoy_cc_library(
         "//source/common/protobuf:utility_lib",
         "//source/common/singleton:const_singleton",
         "//source/common/stats:stats_lib",
+        "//source/common/stats:stats_matcher_lib",
         "//source/common/stats:tag_producer_lib",
         "@envoy_api//envoy/api/v2/core:base_cc",
         "@envoy_api//envoy/config/filter/network/http_connection_manager/v2:http_connection_manager_cc",

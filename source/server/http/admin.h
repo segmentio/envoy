@@ -50,8 +50,7 @@ class AdminImpl : public Admin,
                   public Http::ConnectionManagerConfig,
                   Logger::Loggable<Logger::Id::admin> {
 public:
-  AdminImpl(const std::string& access_log_path, const std::string& profile_path,
-            Server::Instance& server);
+  AdminImpl(const std::string& profile_path, Server::Instance& server);
 
   Http::Code runCallback(absl::string_view path_and_query, Http::HeaderMap& response_headers,
                          Buffer::Instance& response, AdminStream& admin_stream);
@@ -68,7 +67,7 @@ public:
   bool removeHandler(const std::string& prefix) override;
   ConfigTracker& getConfigTracker() override;
 
-  void startHttpListener(const std::string& address_out_path,
+  void startHttpListener(const std::string& access_log_path, const std::string& address_out_path,
                          Network::Address::InstanceConstSharedPtr address,
                          Stats::ScopePtr&& listener_scope) override;
 
@@ -85,7 +84,8 @@ public:
 
   // Http::FilterChainFactory
   void createFilterChain(Http::FilterChainFactoryCallbacks& callbacks) override;
-  bool createUpgradeFilterChain(absl::string_view, Http::FilterChainFactoryCallbacks&) override {
+  bool createUpgradeFilterChain(absl::string_view, const Http::FilterChainFactory::UpgradeMap*,
+                                Http::FilterChainFactoryCallbacks&) override {
     return false;
   }
 
@@ -97,9 +97,11 @@ public:
   Http::DateProvider& dateProvider() override { return date_provider_; }
   std::chrono::milliseconds drainTimeout() override { return std::chrono::milliseconds(100); }
   Http::FilterChainFactory& filterFactory() override { return *this; }
+  bool reverseEncodeOrder() override { return false; }
   bool generateRequestId() override { return false; }
   absl::optional<std::chrono::milliseconds> idleTimeout() const override { return idle_timeout_; }
   std::chrono::milliseconds streamIdleTimeout() const override { return {}; }
+  std::chrono::milliseconds requestTimeout() const override { return {}; }
   std::chrono::milliseconds delayedCloseTimeout() const override { return {}; }
   Router::RouteConfigProvider& routeConfigProvider() override { return route_config_provider_; }
   const std::string& serverName() override { return Http::DefaultServerString::get(); }
@@ -203,6 +205,8 @@ private:
                              Buffer::Instance& response, AdminStream&);
   Http::Code handlerConfigDump(absl::string_view path_and_query, Http::HeaderMap& response_headers,
                                Buffer::Instance& response, AdminStream&) const;
+  Http::Code handlerContention(absl::string_view path_and_query, Http::HeaderMap& response_headers,
+                               Buffer::Instance& response, AdminStream&);
   Http::Code handlerCpuProfiler(absl::string_view path_and_query, Http::HeaderMap& response_headers,
                                 Buffer::Instance& response, AdminStream&);
   Http::Code handlerHealthcheckFail(absl::string_view path_and_query,
@@ -256,9 +260,13 @@ private:
     bool bindToPort() override { return true; }
     bool handOffRestoredDestinationConnections() const override { return false; }
     uint32_t perConnectionBufferLimitBytes() override { return 0; }
+    std::chrono::milliseconds listenerFiltersTimeout() const override {
+      return std::chrono::milliseconds();
+    }
     Stats::Scope& listenerScope() override { return *scope_; }
     uint64_t listenerTag() const override { return 0; }
     const std::string& name() const override { return name_; }
+    bool reverseWriteFilterOrder() const override { return false; }
 
     AdminImpl& parent_;
     const std::string name_;
