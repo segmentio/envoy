@@ -2,7 +2,6 @@ licenses(["notice"])  # Apache 2
 
 load(
     "//bazel:envoy_build_system.bzl",
-    "envoy_cc_test",
     "envoy_package",
 )
 load(
@@ -21,5 +20,6 @@ envoy_extension_cc_test(
         "//source/extensions/filters/network/sni_cluster:config",
         "//test/mocks/network:network_mocks",
         "//test/mocks/server:server_mocks",
+        "//test/mocks/stream_info:stream_info_mocks",
     ],
 )

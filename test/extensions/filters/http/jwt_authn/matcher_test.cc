@@ -1,3 +1,5 @@
+#include "envoy/extensions/filters/http/jwt_authn/v3/config.pb.h"
+
 #include "common/protobuf/utility.h"
 
 #include "extensions/filters/http/jwt_authn/matcher.h"
@@ -6,16 +8,8 @@
 #include "test/extensions/filters/http/jwt_authn/test_common.h"
 #include "test/test_common/utility.h"
 
-using ::envoy::api::v2::route::RouteMatch;
-using ::envoy::config::filter::http::jwt_authn::v2alpha::JwtProvider;
-using ::envoy::config::filter::http::jwt_authn::v2alpha::JwtRequirement;
-using ::envoy::config::filter::http::jwt_authn::v2alpha::RequirementRule;
-using ::Envoy::Http::TestHeaderMapImpl;
-using ::testing::_;
-using ::testing::Invoke;
-using ::testing::NiceMock;
-
-using ::google::jwt_verify::Status;
+using envoy::extensions::filters::http::jwt_authn::v3::RequirementRule;
+using Envoy::Http::TestRequestHeaderMapImpl;
 
 namespace Envoy {
 namespace Extensions {
@@ -23,50 +17,66 @@ namespace HttpFilters {
 namespace JwtAuthn {
 namespace {
 
-class MatcherTest : public ::testing::Test {
+class MatcherTest : public testing::Test {
 public:
-  NiceMock<MockAuthFactory> mock_factory_;
-  MockExtractor extractor_;
 };
 
 TEST_F(MatcherTest, TestMatchPrefix) {
   const char config[] = R"(match:
   prefix: "/match")";
   RequirementRule rule;
-  MessageUtil::loadFromYaml(config, rule);
-  MatcherConstSharedPtr matcher = Matcher::create(
-      rule, Protobuf::Map<ProtobufTypes::String, JwtProvider>(), mock_factory_, extractor_);
-  auto headers = TestHeaderMapImpl{{":path", "/match/this"}};
+  TestUtility::loadFromYaml(config, rule);
+  MatcherConstPtr matcher = Matcher::create(rule);
+  auto headers = TestRequestHeaderMapImpl{{":path", "/match/this"}};
   EXPECT_TRUE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/MATCH"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/MATCH"}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/matching"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/matching"}};
   EXPECT_TRUE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/matc"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/matc"}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/no"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/no"}};
   EXPECT_FALSE(matcher->matches(headers));
-  EXPECT_FALSE(matcher->verifier() == nullptr);
 }
 
 TEST_F(MatcherTest, TestMatchRegex) {
   const char config[] = R"(match:
   regex: "/[^c][au]t")";
   RequirementRule rule;
-  MessageUtil::loadFromYaml(config, rule);
-  MatcherConstSharedPtr matcher = Matcher::create(
-      rule, Protobuf::Map<ProtobufTypes::String, JwtProvider>(), mock_factory_, extractor_);
-  auto headers = TestHeaderMapImpl{{":path", "/but"}};
+  TestUtility::loadFromYaml(config, rule);
+  MatcherConstPtr matcher = Matcher::create(rule);
+  auto headers = TestRequestHeaderMapImpl{{":path", "/but"}};
   EXPECT_TRUE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/mat?ok=bye"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/mat?ok=bye"}};
   EXPECT_TRUE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/maut"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/maut"}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/cut"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/cut"}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/mut/"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/mut/"}};
   EXPECT_FALSE(matcher->matches(headers));
-  EXPECT_FALSE(matcher->verifier() == nullptr);
+}
+
+TEST_F(MatcherTest, TestMatchSafeRegex) {
+  const char config[] = R"(
+match:
+  safe_regex:
+    google_re2: {}
+    regex: "/[^c][au]t")";
+
+  RequirementRule rule;
+  TestUtility::loadFromYaml(config, rule);
+  MatcherConstPtr matcher = Matcher::create(rule);
+  auto headers = TestRequestHeaderMapImpl{{":path", "/but"}};
+  EXPECT_TRUE(matcher->matches(headers));
+  headers = TestRequestHeaderMapImpl{{":path", "/mat?ok=bye"}};
+  EXPECT_TRUE(matcher->matches(headers));
+  headers = TestRequestHeaderMapImpl{{":path", "/maut"}};
+  EXPECT_FALSE(matcher->matches(headers));
+  headers = TestRequestHeaderMapImpl{{":path", "/cut"}};
+  EXPECT_FALSE(matcher->matches(headers));
+  headers = TestRequestHeaderMapImpl{{":path", "/mut/"}};
+  EXPECT_FALSE(matcher->matches(headers));
 }
 
 TEST_F(MatcherTest, TestMatchPath) {
@@ -74,22 +84,20 @@ TEST_F(MatcherTest, TestMatchPath) {
   path: "/match"
   case_sensitive: false)";
   RequirementRule rule;
-  MessageUtil::loadFromYaml(config, rule);
-  MatcherConstSharedPtr matcher = Matcher::create(
-      rule, Protobuf::Map<ProtobufTypes::String, JwtProvider>(), mock_factory_, extractor_);
-  auto headers = TestHeaderMapImpl{{":path", "/match"}};
+  TestUtility::loadFromYaml(config, rule);
+  MatcherConstPtr matcher = Matcher::create(rule);
+  auto headers = TestRequestHeaderMapImpl{{":path", "/match"}};
   EXPECT_TRUE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/MATCH"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/MATCH"}};
   EXPECT_TRUE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/match?ok=bye"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/match?ok=bye"}};
   EXPECT_TRUE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/matc"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/matc"}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/match/"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/match/"}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/matching"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/matching"}};
   EXPECT_FALSE(matcher->matches(headers));
-  EXPECT_FALSE(matcher->verifier() == nullptr);
 }
 
 TEST_F(MatcherTest, TestMatchQuery) {
@@ -99,20 +107,18 @@ TEST_F(MatcherTest, TestMatchQuery) {
   - name: foo
     value: bar)";
   RequirementRule rule;
-  MessageUtil::loadFromYaml(config, rule);
-  MatcherConstSharedPtr matcher = Matcher::create(
-      rule, Protobuf::Map<ProtobufTypes::String, JwtProvider>(), mock_factory_, extractor_);
-  auto headers = TestHeaderMapImpl{{":path", "/boo?foo=bar"}};
+  TestUtility::loadFromYaml(config, rule);
+  MatcherConstPtr matcher = Matcher::create(rule);
+  auto headers = TestRequestHeaderMapImpl{{":path", "/boo?foo=bar"}};
   EXPECT_TRUE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/boo?ok=bye"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/boo?ok=bye"}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/foo?bar=bar"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/foo?bar=bar"}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/boo?foo"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/boo?foo"}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/boo?bar=foo"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/boo?bar=foo"}};
   EXPECT_FALSE(matcher->matches(headers));
-  EXPECT_FALSE(matcher->verifier() == nullptr);
 }
 
 TEST_F(MatcherTest, TestMatchHeader) {
@@ -121,20 +127,18 @@ TEST_F(MatcherTest, TestMatchHeader) {
   headers:
   - name: a)";
   RequirementRule rule;
-  MessageUtil::loadFromYaml(config, rule);
-  MatcherConstSharedPtr matcher = Matcher::create(
-      rule, Protobuf::Map<ProtobufTypes::String, JwtProvider>(), mock_factory_, extractor_);
-  auto headers = TestHeaderMapImpl{{":path", "/"}, {"a", ""}};
+  TestUtility::loadFromYaml(config, rule);
+  MatcherConstPtr matcher = Matcher::create(rule);
+  auto headers = TestRequestHeaderMapImpl{{":path", "/"}, {"a", ""}};
   EXPECT_TRUE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/"}, {"a", "some"}, {"b", ""}};
+  headers = TestRequestHeaderMapImpl{{":path", "/"}, {"a", "some"}, {"b", ""}};
   EXPECT_TRUE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/"}, {"aa", ""}};
+  headers = TestRequestHeaderMapImpl{{":path", "/"}, {"aa", ""}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/"}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/"}, {"", ""}};
+  headers = TestRequestHeaderMapImpl{{":path", "/"}, {"", ""}};
   EXPECT_FALSE(matcher->matches(headers));
-  EXPECT_FALSE(matcher->verifier() == nullptr);
 }
 
 TEST_F(MatcherTest, TestMatchPathAndHeader) {
@@ -144,20 +148,18 @@ TEST_F(MatcherTest, TestMatchPathAndHeader) {
   - name: foo
     value: bar)";
   RequirementRule rule;
-  MessageUtil::loadFromYaml(config, rule);
-  MatcherConstSharedPtr matcher = Matcher::create(
-      rule, Protobuf::Map<ProtobufTypes::String, JwtProvider>(), mock_factory_, extractor_);
-  auto headers = TestHeaderMapImpl{{":path", "/boo?foo=bar"}};
+  TestUtility::loadFromYaml(config, rule);
+  MatcherConstPtr matcher = Matcher::create(rule);
+  auto headers = TestRequestHeaderMapImpl{{":path", "/boo?foo=bar"}};
   EXPECT_TRUE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/boo?ok=bye"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/boo?ok=bye"}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/foo?bar=bar"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/foo?bar=bar"}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/boo?foo"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/boo?foo"}};
   EXPECT_FALSE(matcher->matches(headers));
-  headers = TestHeaderMapImpl{{":path", "/boo?bar=foo"}};
+  headers = TestRequestHeaderMapImpl{{":path", "/boo?bar=foo"}};
   EXPECT_FALSE(matcher->matches(headers));
-  EXPECT_FALSE(matcher->verifier() == nullptr);
 }
 
 } // namespace

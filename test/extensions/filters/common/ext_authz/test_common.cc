@@ -1,5 +1,11 @@
 #include "test/extensions/filters/common/ext_authz/test_common.h"
 
+#include <memory>
+
+#include "envoy/config/core/v3/base.pb.h"
+#include "envoy/service/auth/v3/external_auth.pb.h"
+#include "envoy/type/v3/http_status.pb.h"
+
 #include "test/mocks/upstream/mocks.h"
 
 namespace Envoy {
@@ -9,14 +15,14 @@ namespace Common {
 namespace ExtAuthz {
 
 CheckResponsePtr TestCommon::makeCheckResponse(Grpc::Status::GrpcStatus response_status,
-                                               envoy::type::StatusCode http_status_code,
+                                               envoy::type::v3::StatusCode http_status_code,
                                                const std::string& body,
                                                const HeaderValueOptionVector& headers) {
-  auto response = std::make_unique<envoy::service::auth::v2alpha::CheckResponse>();
+  auto response = std::make_unique<envoy::service::auth::v3::CheckResponse>();
   auto status = response->mutable_status();
   status->set_code(response_status);
 
-  if (response_status != Grpc::Status::GrpcStatus::Ok) {
+  if (response_status != Grpc::Status::WellKnownGrpcStatus::Ok) {
     const auto denied_response = response->mutable_denied_response();
     if (!body.empty()) {
       denied_response->set_body(body);
@@ -69,8 +75,8 @@ Response TestCommon::makeAuthzResponse(CheckStatus status, Http::Code status_cod
 
 HeaderValueOptionVector TestCommon::makeHeaderValueOption(KeyValueOptionVector&& headers) {
   HeaderValueOptionVector header_option_vector{};
-  for (auto header : headers) {
-    envoy::api::v2::core::HeaderValueOption header_value_option;
+  for (const auto& header : headers) {
+    envoy::config::core::v3::HeaderValueOption header_value_option;
     auto* mutable_header = header_value_option.mutable_header();
     mutable_header->set_key(header.key);
     mutable_header->set_value(header.value);
@@ -80,17 +86,22 @@ HeaderValueOptionVector TestCommon::makeHeaderValueOption(KeyValueOptionVector&&
   return header_option_vector;
 }
 
-Http::MessagePtr TestCommon::makeMessageResponse(const HeaderValueOptionVector& headers,
-                                                 const std::string& body) {
-  Http::MessagePtr response(
-      new Http::ResponseMessageImpl(Http::HeaderMapPtr{new Http::TestHeaderMapImpl{}}));
+Http::ResponseMessagePtr TestCommon::makeMessageResponse(const HeaderValueOptionVector& headers,
+                                                         const std::string& body) {
+  Http::ResponseMessagePtr response(new Http::ResponseMessageImpl(
+      Http::ResponseHeaderMapPtr{new Http::TestResponseHeaderMapImpl{}}));
   for (auto& header : headers) {
     response->headers().addCopy(Http::LowerCaseString(header.header().key()),
                                 header.header().value());
   }
-  response->body().reset(new Buffer::OwnedImpl(body));
+  response->body() = std::make_unique<Buffer::OwnedImpl>(body);
   return response;
 };
+
+bool TestCommon::CompareHeaderVector(const Http::HeaderVector& lhs, const Http::HeaderVector& rhs) {
+  return std::set<std::pair<Http::LowerCaseString, std::string>>(lhs.begin(), lhs.end()) ==
+         std::set<std::pair<Http::LowerCaseString, std::string>>(rhs.begin(), rhs.end());
+}
 
 } // namespace ExtAuthz
 } // namespace Common

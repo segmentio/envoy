@@ -1,3 +1,8 @@
+#include "envoy/config/bootstrap/v3/bootstrap.pb.h"
+#include "envoy/config/listener/v3/listener_components.pb.h"
+#include "envoy/extensions/filters/network/rbac/v3/rbac.pb.h"
+#include "envoy/extensions/filters/network/rbac/v3/rbac.pb.validate.h"
+
 #include "extensions/filters/network/rbac/config.h"
 
 #include "test/integration/integration.h"
@@ -9,24 +14,26 @@ namespace Envoy {
 namespace Extensions {
 namespace NetworkFilters {
 namespace RBAC {
-
 namespace {
+
 std::string rbac_config;
+
 } // namespace
 
 class RoleBasedAccessControlNetworkFilterIntegrationTest
-    : public BaseIntegrationTest,
-      public testing::TestWithParam<Network::Address::IpVersion> {
+    : public testing::TestWithParam<Network::Address::IpVersion>,
+      public BaseIntegrationTest {
 public:
   RoleBasedAccessControlNetworkFilterIntegrationTest()
-      : BaseIntegrationTest(GetParam(), realTime(), rbac_config) {}
+      : BaseIntegrationTest(GetParam(), rbac_config) {}
 
-  static void SetUpTestCase() {
-    rbac_config = ConfigHelper::BASE_CONFIG + R"EOF(
+  static void SetUpTestSuite() { // NOLINT(readability-identifier-naming)
+    rbac_config = absl::StrCat(ConfigHelper::baseConfig(), R"EOF(
     filter_chains:
       filters:
-       -  name: envoy.filters.network.rbac
-          config:
+       -  name: rbac
+          typed_config:
+            "@type": type.googleapis.com/envoy.config.filter.network.rbac.v2.RBAC
             stat_prefix: tcp.
             rules:
               policies:
@@ -36,13 +43,14 @@ public:
                   principals:
                     - not_id:
                         any: true
-)EOF";
+       -  name: envoy.filters.network.echo
+)EOF");
   }
 
   void initializeFilter(const std::string& config) {
-    config_helper_.addConfigModifier([config](envoy::config::bootstrap::v2::Bootstrap& bootstrap) {
-      envoy::api::v2::listener::Filter filter;
-      MessageUtil::loadFromYaml(config, filter);
+    config_helper_.addConfigModifier([config](envoy::config::bootstrap::v3::Bootstrap& bootstrap) {
+      envoy::config::listener::v3::Filter filter;
+      TestUtility::loadFromYaml(config, filter);
       ASSERT_GT(bootstrap.mutable_static_resources()->listeners_size(), 0);
       auto l = bootstrap.mutable_static_resources()->mutable_listeners(0);
       ASSERT_GT(l->filter_chains_size(), 0);
@@ -59,14 +67,15 @@ public:
   }
 };
 
-INSTANTIATE_TEST_CASE_P(IpVersions, RoleBasedAccessControlNetworkFilterIntegrationTest,
-                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
-                        TestUtility::ipTestParamsToString);
+INSTANTIATE_TEST_SUITE_P(IpVersions, RoleBasedAccessControlNetworkFilterIntegrationTest,
+                         testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
+                         TestUtility::ipTestParamsToString);
 
 TEST_P(RoleBasedAccessControlNetworkFilterIntegrationTest, Allowed) {
   initializeFilter(R"EOF(
-name: envoy.filters.network.rbac
-config:
+name: rbac
+typed_config:
+  "@type": type.googleapis.com/envoy.config.filter.network.rbac.v2.RBAC
   stat_prefix: tcp.
   rules:
     policies:
@@ -97,8 +106,9 @@ config:
 
 TEST_P(RoleBasedAccessControlNetworkFilterIntegrationTest, Denied) {
   initializeFilter(R"EOF(
-name: envoy.filters.network.rbac
-config:
+name: rbac
+typed_config:
+  "@type": type.googleapis.com/envoy.config.filter.network.rbac.v2.RBAC
   stat_prefix: tcp.
   rules:
     policies:

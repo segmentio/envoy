@@ -13,6 +13,7 @@ envoy_cc_library(
     hdrs = ["filter_config.h"],
     deps = [
         ":filter_interface",
+        "//include/envoy/config:typed_config_interface",
         "//include/envoy/server:filter_config_interface",
         "//source/common/common:macros",
         "//source/common/protobuf:cc_wkt_protos",
@@ -34,7 +35,9 @@ envoy_cc_library(
     deps = [
         "//include/envoy/buffer:buffer_interface",
         "//include/envoy/network:connection_interface",
+        "//include/envoy/stream_info:stream_info_interface",
         "//source/extensions/filters/network/thrift_proxy:decoder_events_lib",
+        "//source/extensions/filters/network/thrift_proxy:protocol_interface",
         "//source/extensions/filters/network/thrift_proxy:thrift_lib",
         "//source/extensions/filters/network/thrift_proxy/router:router_interface",
     ],
@@ -45,5 +48,13 @@ envoy_cc_library(
     hdrs = ["well_known_names.h"],
     deps = [
         "//source/common/singleton:const_singleton",
+    ],
+)
+
+envoy_cc_library(
+    name = "pass_through_filter_lib",
+    hdrs = ["pass_through_filter.h"],
+    deps = [
+        ":filter_interface",
     ],
 )

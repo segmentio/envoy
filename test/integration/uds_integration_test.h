@@ -2,6 +2,8 @@
 
 #include <tuple>
 
+#include "envoy/config/bootstrap/v3/bootstrap.pb.h"
+
 #include "common/common/fmt.h"
 #include "common/http/codec_client.h"
 
@@ -15,11 +17,11 @@
 namespace Envoy {
 
 class UdsUpstreamIntegrationTest
-    : public HttpIntegrationTest,
-      public testing::TestWithParam<std::tuple<Network::Address::IpVersion, bool>> {
+    : public testing::TestWithParam<std::tuple<Network::Address::IpVersion, bool>>,
+      public HttpIntegrationTest {
 public:
   UdsUpstreamIntegrationTest()
-      : HttpIntegrationTest(Http::CodecClient::Type::HTTP1, std::get<0>(GetParam()), realTime()),
+      : HttpIntegrationTest(Http::CodecClient::Type::HTTP1, std::get<0>(GetParam())),
         abstract_namespace_(std::get<1>(GetParam())) {}
 
   void createUpstreams() override {
@@ -28,14 +30,21 @@ public:
         FakeHttpConnection::Type::HTTP1, timeSystem()));
 
     config_helper_.addConfigModifier(
-        [&](envoy::config::bootstrap::v2::Bootstrap& bootstrap) -> void {
+        [&](envoy::config::bootstrap::v3::Bootstrap& bootstrap) -> void {
           auto* static_resources = bootstrap.mutable_static_resources();
           for (int i = 0; i < static_resources->clusters_size(); ++i) {
             auto* cluster = static_resources->mutable_clusters(i);
-            for (int j = 0; j < cluster->hosts_size(); ++j) {
-              cluster->mutable_hosts(j)->clear_socket_address();
-              cluster->mutable_hosts(j)->mutable_pipe()->set_path(
-                  TestEnvironment::unixDomainSocketPath("udstest.1.sock", abstract_namespace_));
+            for (int j = 0; j < cluster->load_assignment().endpoints_size(); ++j) {
+              auto locality_lb = cluster->mutable_load_assignment()->mutable_endpoints(j);
+              for (int k = 0; k < locality_lb->lb_endpoints_size(); ++k) {
+                auto lb_endpoint = locality_lb->mutable_lb_endpoints(k);
+                if (lb_endpoint->endpoint().address().has_socket_address()) {
+                  auto* address = lb_endpoint->mutable_endpoint()->mutable_address();
+                  address->clear_socket_address();
+                  address->mutable_pipe()->set_path(
+                      TestEnvironment::unixDomainSocketPath("udstest.1.sock", abstract_namespace_));
+                }
+              }
             }
           }
         });
@@ -46,11 +55,11 @@ protected:
 };
 
 class UdsListenerIntegrationTest
-    : public HttpIntegrationTest,
-      public testing::TestWithParam<std::tuple<Network::Address::IpVersion, bool>> {
+    : public testing::TestWithParam<std::tuple<Network::Address::IpVersion, bool>>,
+      public HttpIntegrationTest {
 public:
   UdsListenerIntegrationTest()
-      : HttpIntegrationTest(Http::CodecClient::Type::HTTP1, std::get<0>(GetParam()), realTime()),
+      : HttpIntegrationTest(Http::CodecClient::Type::HTTP1, std::get<0>(GetParam())),
         abstract_namespace_(std::get<1>(GetParam())) {}
 
   void initialize() override;

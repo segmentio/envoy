@@ -10,7 +10,6 @@
 
 #include "gtest/gtest.h"
 
-using testing::TestWithParam;
 using testing::Values;
 
 namespace Envoy {
@@ -93,7 +92,7 @@ TEST_F(CompactProtocolTest, ReadMessageBegin) {
 
     EXPECT_THROW_WITH_MESSAGE(
         proto.readMessageBegin(buffer, metadata_), EnvoyException,
-        fmt::format("invalid compact protocol message type {}", invalid_msg_type));
+        absl::StrCat("invalid compact protocol message type ", invalid_msg_type));
     expectDefaultMetadata();
     EXPECT_EQ(buffer.length(), 4);
   }
@@ -998,7 +997,7 @@ TEST_F(CompactProtocolTest, ReadBinary) {
   EXPECT_EQ(buffer.length(), 0);
 }
 
-class CompactProtocolFieldTypeTest : public TestWithParam<uint8_t> {};
+class CompactProtocolFieldTypeTest : public testing::TestWithParam<uint8_t> {};
 
 TEST_P(CompactProtocolFieldTypeTest, ConvertsToFieldType) {
   uint8_t compact_field_type = GetParam();
@@ -1032,8 +1031,8 @@ TEST_P(CompactProtocolFieldTypeTest, ConvertsToFieldType) {
   }
 }
 
-INSTANTIATE_TEST_CASE_P(CompactFieldTypes, CompactProtocolFieldTypeTest,
-                        Values(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12));
+INSTANTIATE_TEST_SUITE_P(CompactFieldTypes, CompactProtocolFieldTypeTest,
+                         Values(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12));
 
 TEST_F(CompactProtocolTest, WriteMessageBegin) {
   CompactProtocolImpl proto;
@@ -1164,7 +1163,7 @@ TEST_F(CompactProtocolTest, WriteFieldBegin) {
 
     EXPECT_THROW_WITH_MESSAGE(proto.writeFieldBegin(buffer, "unused", field_type, 1),
                               EnvoyException,
-                              fmt::format("unknown protocol field type {}", invalid_field_type));
+                              absl::StrCat("unknown protocol field type ", invalid_field_type));
   }
 }
 

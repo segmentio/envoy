@@ -22,6 +22,7 @@ TsiSocket::TsiSocket(HandshakerFactory handshaker_factory, HandshakeValidator ha
 TsiSocket::~TsiSocket() { ASSERT(!handshaker_); }
 
 void TsiSocket::setTransportSocketCallbacks(Envoy::Network::TransportSocketCallbacks& callbacks) {
+  ASSERT(!callbacks_);
   callbacks_ = &callbacks;
 
   noop_callbacks_ = std::make_unique<NoOpTransportSocketCallbacks>(callbacks);
@@ -34,18 +35,15 @@ std::string TsiSocket::protocol() const {
   return EMPTY_STRING;
 }
 
+absl::string_view TsiSocket::failureReason() const {
+  // TODO(htuch): Implement error reason for TSI.
+  return EMPTY_STRING;
+}
+
 Network::PostIoAction TsiSocket::doHandshake() {
   ASSERT(!handshake_complete_);
   ENVOY_CONN_LOG(debug, "TSI: doHandshake", callbacks_->connection());
-
-  if (!handshaker_) {
-    handshaker_ = handshaker_factory_(callbacks_->connection().dispatcher(),
-                                      callbacks_->connection().localAddress(),
-                                      callbacks_->connection().remoteAddress());
-    handshaker_->setHandshakerCallbacks(*this);
-  }
-
-  if (!handshaker_next_calling_) {
+  if (!handshaker_next_calling_ && raw_read_buffer_.length() > 0) {
     doHandshakeNext();
   }
   return Network::PostIoAction::KeepOpen;
@@ -54,6 +52,20 @@ Network::PostIoAction TsiSocket::doHandshake() {
 void TsiSocket::doHandshakeNext() {
   ENVOY_CONN_LOG(debug, "TSI: doHandshake next: received: {}", callbacks_->connection(),
                  raw_read_buffer_.length());
+
+  if (!handshaker_) {
+    handshaker_ = handshaker_factory_(callbacks_->connection().dispatcher(),
+                                      callbacks_->connection().localAddress(),
+                                      callbacks_->connection().remoteAddress());
+    if (!handshaker_) {
+      ENVOY_CONN_LOG(warn, "TSI: failed to create handshaker", callbacks_->connection());
+      callbacks_->connection().close(Network::ConnectionCloseType::NoFlush);
+      return;
+    }
+
+    handshaker_->setHandshakerCallbacks(*this);
+  }
+
   handshaker_next_calling_ = true;
   Buffer::OwnedImpl handshaker_buffer;
   handshaker_buffer.move(raw_read_buffer_);
@@ -119,9 +131,10 @@ Network::PostIoAction TsiSocket::doHandshakeNextDone(NextResultPtr&& next_result
                    unused_byte_size);
 
     // returns TSI_OK assuming there is no fatal error. Asserting OK.
-    tsi_frame_protector* frame_protector;
-    status =
-        tsi_handshaker_result_create_frame_protector(handshaker_result, NULL, &frame_protector);
+    tsi_zero_copy_grpc_protector* frame_protector;
+    grpc_core::ExecCtx exec_ctx;
+    status = tsi_handshaker_result_create_zero_copy_grpc_protector(handshaker_result, nullptr,
+                                                                   &frame_protector);
     ASSERT(status == TSI_OK);
     frame_protector_ = std::make_unique<TsiFrameProtector>(frame_protector);
 
@@ -156,6 +169,10 @@ Network::IoResult TsiSocket::doRead(Buffer::Instance& buffer) {
                    result.end_stream_read_);
     if (result.action_ == Network::PostIoAction::Close && result.bytes_processed_ == 0) {
       return result;
+    }
+
+    if (!handshake_complete_ && result.end_stream_read_ && result.bytes_processed_ == 0) {
+      return {Network::PostIoAction::Close, result.bytes_processed_, result.end_stream_read_};
     }
 
     end_stream_read_ = result.end_stream_read_;
@@ -212,12 +229,16 @@ Network::IoResult TsiSocket::doWrite(Buffer::Instance& buffer, bool end_stream) 
 }
 
 void TsiSocket::closeSocket(Network::ConnectionEvent) {
+  ENVOY_CONN_LOG(debug, "TSI: closing socket", callbacks_->connection());
   if (handshaker_) {
     handshaker_.release()->deferredDelete();
   }
 }
 
-void TsiSocket::onConnected() { ASSERT(!handshake_complete_); }
+void TsiSocket::onConnected() {
+  ASSERT(!handshake_complete_);
+  doHandshakeNext();
+}
 
 void TsiSocket::onNextDone(NextResultPtr&& result) {
   handshaker_next_calling_ = false;
@@ -235,7 +256,8 @@ TsiSocketFactory::TsiSocketFactory(HandshakerFactory handshaker_factory,
 
 bool TsiSocketFactory::implementsSecureTransport() const { return true; }
 
-Network::TransportSocketPtr TsiSocketFactory::createTransportSocket() const {
+Network::TransportSocketPtr
+TsiSocketFactory::createTransportSocket(Network::TransportSocketOptionsSharedPtr) const {
   return std::make_unique<TsiSocket>(handshaker_factory_, handshake_validator_);
 }
 

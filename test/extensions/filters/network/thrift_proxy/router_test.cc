@@ -1,5 +1,7 @@
-#include "envoy/config/filter/network/thrift_proxy/v2alpha1/route.pb.h"
-#include "envoy/config/filter/network/thrift_proxy/v2alpha1/route.pb.validate.h"
+#include <memory>
+
+#include "envoy/config/filter/thrift/router/v2alpha1/router.pb.h"
+#include "envoy/config/filter/thrift/router/v2alpha1/router.pb.validate.h"
 #include "envoy/tcp/conn_pool.h"
 
 #include "common/buffer/buffer_impl.h"
@@ -21,14 +23,12 @@
 
 using testing::_;
 using testing::ContainsRegex;
-using testing::InSequence;
+using testing::Eq;
 using testing::Invoke;
 using testing::NiceMock;
 using testing::Ref;
 using testing::Return;
 using testing::ReturnRef;
-using testing::Test;
-using testing::TestWithParam;
 using testing::Values;
 
 namespace Envoy {
@@ -36,7 +36,6 @@ namespace Extensions {
 namespace NetworkFilters {
 namespace ThriftProxy {
 namespace Router {
-
 namespace {
 
 class TestNamedTransportConfigFactory : public NamedTransportConfigFactory {
@@ -44,7 +43,7 @@ public:
   TestNamedTransportConfigFactory(std::function<MockTransport*()> f) : f_(f) {}
 
   TransportPtr createTransport() override { return TransportPtr{f_()}; }
-  std::string name() override { return TransportNames::get().FRAMED; }
+  std::string name() const override { return TransportNames::get().FRAMED; }
 
   std::function<MockTransport*()> f_;
 };
@@ -54,7 +53,7 @@ public:
   TestNamedProtocolConfigFactory(std::function<MockProtocol*()> f) : f_(f) {}
 
   ProtocolPtr createProtocol() override { return ProtocolPtr{f_()}; }
-  std::string name() override { return ProtocolNames::get().BINARY; }
+  std::string name() const override { return ProtocolNames::get().BINARY; }
 
   std::function<MockProtocol*()> f_;
 };
@@ -86,30 +85,35 @@ public:
     route_ = new NiceMock<MockRoute>();
     route_ptr_.reset(route_);
 
-    router_.reset(new Router(context_.clusterManager()));
+    router_ = std::make_unique<Router>(context_.clusterManager(), "test", context_.scope());
 
     EXPECT_EQ(nullptr, router_->downstreamConnection());
 
     router_->setDecoderFilterCallbacks(callbacks_);
   }
 
-  void initializeMetadata(MessageType msg_type) {
+  void initializeMetadata(MessageType msg_type, std::string method = "method") {
     msg_type_ = msg_type;
 
-    metadata_.reset(new MessageMetadata());
-    metadata_->setMethodName("method");
+    metadata_ = std::make_shared<MessageMetadata>();
+    metadata_->setMethodName(method);
     metadata_->setMessageType(msg_type_);
     metadata_->setSequenceId(1);
   }
 
-  void startRequest(MessageType msg_type) {
+  void startRequest(MessageType msg_type, std::string method = "method",
+                    const bool strip_service_name = false) {
     EXPECT_EQ(FilterStatus::Continue, router_->transportBegin(metadata_));
 
     EXPECT_CALL(callbacks_, route()).WillOnce(Return(route_ptr_));
     EXPECT_CALL(*route_, routeEntry()).WillOnce(Return(&route_entry_));
     EXPECT_CALL(route_entry_, clusterName()).WillRepeatedly(ReturnRef(cluster_name_));
 
-    initializeMetadata(msg_type);
+    if (strip_service_name) {
+      EXPECT_CALL(route_entry_, stripServiceName()).WillOnce(Return(true));
+    }
+
+    initializeMetadata(msg_type, method);
 
     EXPECT_CALL(callbacks_, downstreamTransportType()).WillOnce(Return(TransportType::Framed));
     EXPECT_CALL(callbacks_, downstreamProtocolType()).WillOnce(Return(ProtocolType::Binary));
@@ -166,7 +170,7 @@ public:
         }));
 
     if (!conn_state_) {
-      conn_state_.reset(new ThriftConnectionState());
+      conn_state_ = std::make_unique<ThriftConnectionState>();
     }
     EXPECT_CALL(*context_.cluster_manager_.tcp_conn_pool_.connection_data_, connectionState())
         .WillRepeatedly(
@@ -328,29 +332,28 @@ public:
   NiceMock<Network::MockClientConnection> upstream_connection_;
 };
 
-class ThriftRouterTest : public ThriftRouterTestBase, public Test {
+class ThriftRouterTest : public testing::Test, public ThriftRouterTestBase {
 public:
-  ThriftRouterTest() {}
 };
 
-class ThriftRouterFieldTypeTest : public ThriftRouterTestBase, public TestWithParam<FieldType> {
+class ThriftRouterFieldTypeTest : public testing::TestWithParam<FieldType>,
+                                  public ThriftRouterTestBase {
 public:
-  ThriftRouterFieldTypeTest() {}
 };
 
-INSTANTIATE_TEST_CASE_P(PrimitiveFieldTypes, ThriftRouterFieldTypeTest,
-                        Values(FieldType::Bool, FieldType::Byte, FieldType::I16, FieldType::I32,
-                               FieldType::I64, FieldType::Double, FieldType::String),
-                        fieldTypeParamToString);
+INSTANTIATE_TEST_SUITE_P(PrimitiveFieldTypes, ThriftRouterFieldTypeTest,
+                         Values(FieldType::Bool, FieldType::Byte, FieldType::I16, FieldType::I32,
+                                FieldType::I64, FieldType::Double, FieldType::String),
+                         fieldTypeParamToString);
 
-class ThriftRouterContainerTest : public ThriftRouterTestBase, public TestWithParam<FieldType> {
+class ThriftRouterContainerTest : public testing::TestWithParam<FieldType>,
+                                  public ThriftRouterTestBase {
 public:
-  ThriftRouterContainerTest() {}
 };
 
-INSTANTIATE_TEST_CASE_P(ContainerFieldTypes, ThriftRouterContainerTest,
-                        Values(FieldType::Map, FieldType::List, FieldType::Set),
-                        fieldTypeParamToString);
+INSTANTIATE_TEST_SUITE_P(ContainerFieldTypes, ThriftRouterContainerTest,
+                         Values(FieldType::Map, FieldType::List, FieldType::Set),
+                         fieldTypeParamToString);
 
 TEST_F(ThriftRouterTest, PoolRemoteConnectionFailure) {
   initializeRouter();
@@ -434,6 +437,7 @@ TEST_F(ThriftRouterTest, NoRoute) {
         EXPECT_TRUE(end_stream);
       }));
   EXPECT_EQ(FilterStatus::StopIteration, router_->messageBegin(metadata_));
+  EXPECT_EQ(1U, context_.scope().counterFromString("test.route_missing").value());
 }
 
 TEST_F(ThriftRouterTest, NoCluster) {
@@ -443,7 +447,7 @@ TEST_F(ThriftRouterTest, NoCluster) {
   EXPECT_CALL(callbacks_, route()).WillOnce(Return(route_ptr_));
   EXPECT_CALL(*route_, routeEntry()).WillOnce(Return(&route_entry_));
   EXPECT_CALL(route_entry_, clusterName()).WillRepeatedly(ReturnRef(cluster_name_));
-  EXPECT_CALL(context_.cluster_manager_, get(cluster_name_)).WillOnce(Return(nullptr));
+  EXPECT_CALL(context_.cluster_manager_, get(Eq(cluster_name_))).WillOnce(Return(nullptr));
   EXPECT_CALL(callbacks_, sendLocalReply(_, _))
       .WillOnce(Invoke([&](const DirectResponse& response, bool end_stream) -> void {
         auto& app_ex = dynamic_cast<const AppException&>(response);
@@ -452,6 +456,7 @@ TEST_F(ThriftRouterTest, NoCluster) {
         EXPECT_TRUE(end_stream);
       }));
   EXPECT_EQ(FilterStatus::StopIteration, router_->messageBegin(metadata_));
+  EXPECT_EQ(1U, context_.scope().counterFromString("test.unknown_cluster").value());
 }
 
 TEST_F(ThriftRouterTest, ClusterMaintenanceMode) {
@@ -472,6 +477,7 @@ TEST_F(ThriftRouterTest, ClusterMaintenanceMode) {
         EXPECT_TRUE(end_stream);
       }));
   EXPECT_EQ(FilterStatus::StopIteration, router_->messageBegin(metadata_));
+  EXPECT_EQ(1U, context_.scope().counterFromString("test.upstream_rq_maintenance_mode").value());
 }
 
 TEST_F(ThriftRouterTest, NoHealthyHosts) {
@@ -493,6 +499,7 @@ TEST_F(ThriftRouterTest, NoHealthyHosts) {
       }));
 
   EXPECT_EQ(FilterStatus::StopIteration, router_->messageBegin(metadata_));
+  EXPECT_EQ(1U, context_.scope().counterFromString("test.no_healthy_upstream").value());
 }
 
 TEST_F(ThriftRouterTest, TruncatedResponse) {
@@ -600,12 +607,34 @@ TEST_F(ThriftRouterTest, UnexpectedUpstreamLocalClose) {
   router_->onEvent(Network::ConnectionEvent::RemoteClose);
 }
 
+// Regression test for https://github.com/envoyproxy/envoy/issues/9037.
+TEST_F(ThriftRouterTest, DontCloseConnectionTwice) {
+  initializeRouter();
+  startRequest(MessageType::Call);
+  connectUpstream();
+  sendTrivialStruct(FieldType::String);
+
+  EXPECT_CALL(callbacks_, sendLocalReply(_, _))
+      .WillOnce(Invoke([&](const DirectResponse& response, bool end_stream) -> void {
+        auto& app_ex = dynamic_cast<const AppException&>(response);
+        EXPECT_EQ(AppExceptionType::InternalError, app_ex.type_);
+        EXPECT_THAT(app_ex.what(), ContainsRegex(".*connection failure.*"));
+        EXPECT_TRUE(end_stream);
+      }));
+  router_->onEvent(Network::ConnectionEvent::RemoteClose);
+
+  // Connection close shouldn't happen in onDestroy(), since it's been handled.
+  EXPECT_CALL(upstream_connection_, close(Network::ConnectionCloseType::NoFlush)).Times(0);
+  destroyRouter();
+}
+
 TEST_F(ThriftRouterTest, UnexpectedRouterDestroyBeforeUpstreamConnect) {
   initializeRouter();
   startRequest(MessageType::Call);
 
   EXPECT_EQ(1, context_.cluster_manager_.tcp_conn_pool_.handles_.size());
-  EXPECT_CALL(context_.cluster_manager_.tcp_conn_pool_.handles_.front(), cancel());
+  EXPECT_CALL(context_.cluster_manager_.tcp_conn_pool_.handles_.front(),
+              cancel(Tcp::ConnectionPool::CancelPolicy::Default));
   destroyRouter();
 }
 
@@ -734,11 +763,43 @@ TEST_P(ThriftRouterFieldTypeTest, Call) {
   destroyRouter();
 }
 
+// Ensure the service name gets stripped when strip_service_name = true.
+TEST_P(ThriftRouterFieldTypeTest, StripServiceNameEnabled) {
+  FieldType field_type = GetParam();
+
+  initializeRouter();
+  startRequest(MessageType::Call, "Service:method", true);
+  connectUpstream();
+  sendTrivialStruct(field_type);
+  completeRequest();
+
+  EXPECT_EQ("method", metadata_->methodName());
+
+  returnResponse();
+  destroyRouter();
+}
+
+// Ensure the service name prefix isn't stripped when strip_service_name = false.
+TEST_P(ThriftRouterFieldTypeTest, StripServiceNameDisabled) {
+  FieldType field_type = GetParam();
+
+  initializeRouter();
+  startRequest(MessageType::Call, "Service:method", false);
+  connectUpstream();
+  sendTrivialStruct(field_type);
+  completeRequest();
+
+  EXPECT_EQ("Service:method", metadata_->methodName());
+
+  returnResponse();
+  destroyRouter();
+}
+
 TEST_F(ThriftRouterTest, CallWithExistingConnection) {
   initializeRouter();
 
   // Simulate previous sequence id usage.
-  conn_state_.reset(new ThriftConnectionState(3));
+  conn_state_ = std::make_unique<ThriftConnectionState>(3);
 
   startRequestWithExistingConnection(MessageType::Call);
   sendTrivialStruct(FieldType::I32);

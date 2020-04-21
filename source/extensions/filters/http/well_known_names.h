@@ -13,41 +13,52 @@ namespace HttpFilters {
 class HttpFilterNameValues {
 public:
   // Buffer filter
-  const std::string Buffer = "envoy.buffer";
+  const std::string Buffer = "envoy.filters.http.buffer";
+  // Cache filter
+  const std::string Cache = "envoy.filters.http.cache";
   // CORS filter
-  const std::string Cors = "envoy.cors";
+  const std::string Cors = "envoy.filters.http.cors";
+  // CSRF filter
+  const std::string Csrf = "envoy.filters.http.csrf";
   // Dynamo filter
-  const std::string Dynamo = "envoy.http_dynamo_filter";
+  const std::string Dynamo = "envoy.filters.http.dynamo";
   // Fault filter
-  const std::string Fault = "envoy.fault";
+  const std::string Fault = "envoy.filters.http.fault";
   // GRPC http1 bridge filter
-  const std::string GrpcHttp1Bridge = "envoy.grpc_http1_bridge";
+  const std::string GrpcHttp1Bridge = "envoy.filters.http.grpc_http1_bridge";
   // GRPC json transcoder filter
-  const std::string GrpcJsonTranscoder = "envoy.grpc_json_transcoder";
+  const std::string GrpcJsonTranscoder = "envoy.filters.http.grpc_json_transcoder";
   // GRPC web filter
-  const std::string GrpcWeb = "envoy.grpc_web";
+  const std::string GrpcWeb = "envoy.filters.http.grpc_web";
+  // GRPC http1 reverse bridge filter
+  const std::string GrpcHttp1ReverseBridge = "envoy.filters.http.grpc_http1_reverse_bridge";
+  // GRPC telemetry
+  const std::string GrpcStats = "envoy.filters.http.grpc_stats";
   // Gzip filter
-  const std::string EnvoyGzip = "envoy.gzip";
+  const std::string EnvoyGzip = "envoy.filters.http.gzip";
   // IP tagging filter
-  const std::string IpTagging = "envoy.ip_tagging";
+  const std::string IpTagging = "envoy.filters.http.ip_tagging";
   // Rate limit filter
-  const std::string RateLimit = "envoy.rate_limit";
+  const std::string RateLimit = "envoy.filters.http.ratelimit";
   // Router filter
-  const std::string Router = "envoy.router";
+  const std::string Router = "envoy.filters.http.router";
   // Health checking filter
-  const std::string HealthCheck = "envoy.health_check";
+  const std::string HealthCheck = "envoy.filters.http.health_check";
   // Lua filter
-  const std::string Lua = "envoy.lua";
+  const std::string Lua = "envoy.filters.http.lua";
+  // On-demand RDS updates filter
+  const std::string OnDemand = "envoy.filters.http.on_demand";
   // Squash filter
-  const std::string Squash = "envoy.squash";
+  const std::string Squash = "envoy.filters.http.squash";
   // External Authorization filter
-  const std::string ExtAuthorization = "envoy.ext_authz";
+  const std::string ExtAuthorization = "envoy.filters.http.ext_authz";
   // RBAC HTTP Authorization filter
   const std::string Rbac = "envoy.filters.http.rbac";
   // JWT authentication filter
   const std::string JwtAuthn = "envoy.filters.http.jwt_authn";
   // Header to metadata filter
   const std::string HeaderToMetadata = "envoy.filters.http.header_to_metadata";
+
   // GRPC Errors filter
   const std::string GrpcErrors = "envoy.filters.http.grpcerrors";
 
@@ -59,9 +70,23 @@ public:
       : v1_converter_({Buffer, Cors, Dynamo, Fault, GrpcHttp1Bridge, GrpcJsonTranscoder, GrpcWeb,
                        HeaderToMetadata, HealthCheck, IpTagging, RateLimit, Router, Lua,
                        ExtAuthorization, GrpcErrors}) {}
+
+  // Tap filter
+  const std::string Tap = "envoy.filters.http.tap";
+  // Adaptive concurrency limit filter
+  const std::string AdaptiveConcurrency = "envoy.filters.http.adaptive_concurrency";
+  // Original Src Filter
+  const std::string OriginalSrc = "envoy.filters.http.original_src";
+  // Dynamic forward proxy filter
+  const std::string DynamicForwardProxy = "envoy.filters.http.dynamic_forward_proxy";
+  // AWS request signing filter
+  const std::string AwsRequestSigning = "envoy.filters.http.aws_request_signing";
+  // AWS Lambda filter
+  const std::string AwsLambda = "envoy.filters.http.aws_lambda";
+
 };
 
-typedef ConstSingleton<HttpFilterNameValues> HttpFilterNames;
+using HttpFilterNames = ConstSingleton<HttpFilterNameValues>;
 
 } // namespace HttpFilters
 } // namespace Extensions

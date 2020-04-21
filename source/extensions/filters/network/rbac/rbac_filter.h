@@ -1,5 +1,6 @@
 #pragma once
 
+#include "envoy/extensions/filters/network/rbac/v3/rbac.pb.h"
 #include "envoy/network/connection.h"
 #include "envoy/network/filter.h"
 #include "envoy/stats/stats_macros.h"
@@ -22,34 +23,41 @@ enum EngineResult { Unknown, None, Allow, Deny };
 class RoleBasedAccessControlFilterConfig {
 public:
   RoleBasedAccessControlFilterConfig(
-      const envoy::config::filter::network::rbac::v2::RBAC& proto_config, Stats::Scope& scope);
+      const envoy::extensions::filters::network::rbac::v3::RBAC& proto_config, Stats::Scope& scope);
 
   Filters::Common::RBAC::RoleBasedAccessControlFilterStats& stats() { return stats_; }
 
-  const absl::optional<Filters::Common::RBAC::RoleBasedAccessControlEngineImpl>&
+  const Filters::Common::RBAC::RoleBasedAccessControlEngineImpl*
   engine(Filters::Common::RBAC::EnforcementMode mode) const {
-    return mode == Filters::Common::RBAC::EnforcementMode::Enforced ? engine_ : shadow_engine_;
+    return mode == Filters::Common::RBAC::EnforcementMode::Enforced ? engine_.get()
+                                                                    : shadow_engine_.get();
+  }
+
+  envoy::extensions::filters::network::rbac::v3::RBAC::EnforcementType enforcementType() const {
+    return enforcement_type_;
   }
 
 private:
   Filters::Common::RBAC::RoleBasedAccessControlFilterStats stats_;
 
-  const absl::optional<Filters::Common::RBAC::RoleBasedAccessControlEngineImpl> engine_;
-  const absl::optional<Filters::Common::RBAC::RoleBasedAccessControlEngineImpl> shadow_engine_;
+  std::unique_ptr<Filters::Common::RBAC::RoleBasedAccessControlEngineImpl> engine_;
+  std::unique_ptr<Filters::Common::RBAC::RoleBasedAccessControlEngineImpl> shadow_engine_;
+  const envoy::extensions::filters::network::rbac::v3::RBAC::EnforcementType enforcement_type_;
 };
 
-typedef std::shared_ptr<RoleBasedAccessControlFilterConfig>
-    RoleBasedAccessControlFilterConfigSharedPtr;
+using RoleBasedAccessControlFilterConfigSharedPtr =
+    std::shared_ptr<RoleBasedAccessControlFilterConfig>;
 
 /**
  * Implementation of a basic RBAC network filter.
  */
 class RoleBasedAccessControlFilter : public Network::ReadFilter,
                                      public Logger::Loggable<Logger::Id::rbac> {
+
 public:
   RoleBasedAccessControlFilter(RoleBasedAccessControlFilterConfigSharedPtr config)
       : config_(config) {}
-  ~RoleBasedAccessControlFilter() {}
+  ~RoleBasedAccessControlFilter() override = default;
 
   // Network::ReadFilter
   Network::FilterStatus onData(Buffer::Instance& data, bool end_stream) override;
@@ -57,6 +65,8 @@ public:
   void initializeReadFilterCallbacks(Network::ReadFilterCallbacks& callbacks) override {
     callbacks_ = &callbacks;
   }
+
+  void setDynamicMetadata(std::string shadow_engine_result, std::string shadow_policy_id);
 
 private:
   RoleBasedAccessControlFilterConfigSharedPtr config_;

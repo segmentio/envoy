@@ -10,30 +10,21 @@ struct WebsocketProtocolTestParams {
   Network::Address::IpVersion version;
   Http::CodecClient::Type downstream_protocol;
   FakeHttpConnection::Type upstream_protocol;
-  bool old_style;
 };
 
-class WebsocketIntegrationTest : public HttpIntegrationTest,
-                                 public testing::TestWithParam<WebsocketProtocolTestParams> {
+class WebsocketIntegrationTest : public HttpProtocolIntegrationTest {
 public:
-  WebsocketIntegrationTest()
-      : HttpIntegrationTest(GetParam().downstream_protocol, GetParam().version, realTime()) {}
   void initialize() override;
-  void SetUp() override {
-    setDownstreamProtocol(GetParam().downstream_protocol);
-    setUpstreamProtocol(GetParam().upstream_protocol);
-  }
 
 protected:
-  void performUpgrade(const Http::TestHeaderMapImpl& upgrade_request_headers,
-                      const Http::TestHeaderMapImpl& upgrade_response_headers);
+  void performUpgrade(const Http::TestRequestHeaderMapImpl& upgrade_request_headers,
+                      const Http::TestResponseHeaderMapImpl& upgrade_response_headers);
   void sendBidirectionalData();
 
-  void validateUpgradeRequestHeaders(const Http::HeaderMap& proxied_request_headers,
-                                     const Http::HeaderMap& original_request_headers);
-  void validateUpgradeResponseHeaders(const Http::HeaderMap& proxied_response_headers,
-                                      const Http::HeaderMap& original_response_headers);
-  void commonValidate(Http::HeaderMap& proxied_headers, const Http::HeaderMap& original_headers);
+  void validateUpgradeRequestHeaders(const Http::RequestHeaderMap& proxied_request_headers,
+                                     const Http::RequestHeaderMap& original_request_headers);
+  void validateUpgradeResponseHeaders(const Http::ResponseHeaderMap& proxied_response_headers,
+                                      const Http::ResponseHeaderMap& original_response_headers);
 
   ABSL_MUST_USE_RESULT
   testing::AssertionResult waitForUpstreamDisconnectOrReset() {
@@ -53,11 +44,6 @@ protected:
   }
 
   IntegrationStreamDecoderPtr response_;
-  // True if the test uses "old style" TCP proxy websockets. False to use the
-  // new style "HTTP filter chain" websockets.
-  // See
-  // https://github.com/envoyproxy/envoy/blob/master/docs/root/intro/arch_overview/websocket.rst
-  bool old_style_websockets_{GetParam().old_style};
 };
 
 } // namespace Envoy

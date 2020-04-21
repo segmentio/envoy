@@ -1,4 +1,6 @@
-#include "envoy/config/filter/network/rbac/v2/rbac.pb.validate.h"
+#include "envoy/config/rbac/v3/rbac.pb.h"
+#include "envoy/extensions/filters/network/rbac/v3/rbac.pb.h"
+#include "envoy/extensions/filters/network/rbac/v3/rbac.pb.validate.h"
 
 #include "extensions/filters/network/rbac/config.h"
 
@@ -15,34 +17,26 @@ namespace Envoy {
 namespace Extensions {
 namespace NetworkFilters {
 namespace RBACFilter {
-
 namespace {
+
 const std::string header = R"EOF(
 { "header": {"name": "key", "exact_match": "value"} }
 )EOF";
 
-const std::string metadata = R"EOF(
-{
-  "metadata": {
-    "filter": "t", "path": [ { "key": "a" } ], "value": { "string_match": { "exact": "x" } }
-  }
-}
-)EOF";
 } // namespace
 
 class RoleBasedAccessControlNetworkFilterConfigFactoryTest : public testing::Test {
 public:
   void validateRule(const std::string& policy_json) {
     checkRule(fmt::sprintf(policy_json, header));
-    checkRule(fmt::sprintf(policy_json, metadata));
   }
 
 private:
   void checkRule(const std::string& policy_json) {
-    envoy::config::rbac::v2alpha::Policy policy_proto{};
-    MessageUtil::loadFromJson(policy_json, policy_proto);
+    envoy::config::rbac::v3::Policy policy_proto{};
+    TestUtility::loadFromJson(policy_json, policy_proto);
 
-    envoy::config::filter::network::rbac::v2::RBAC config{};
+    envoy::extensions::filters::network::rbac::v3::RBAC config{};
     config.set_stat_prefix("test");
     (*config.mutable_rules()->mutable_policies())["foo"] = policy_proto;
 
@@ -57,10 +51,10 @@ private:
 };
 
 TEST_F(RoleBasedAccessControlNetworkFilterConfigFactoryTest, ValidProto) {
-  envoy::config::rbac::v2alpha::Policy policy;
+  envoy::config::rbac::v3::Policy policy;
   policy.add_permissions()->set_any(true);
   policy.add_principals()->set_any(true);
-  envoy::config::filter::network::rbac::v2::RBAC config;
+  envoy::extensions::filters::network::rbac::v3::RBAC config;
   config.set_stat_prefix("stats");
   (*config.mutable_rules()->mutable_policies())["foo"] = policy;
 
@@ -74,7 +68,7 @@ TEST_F(RoleBasedAccessControlNetworkFilterConfigFactoryTest, ValidProto) {
 
 TEST_F(RoleBasedAccessControlNetworkFilterConfigFactoryTest, EmptyProto) {
   RoleBasedAccessControlNetworkFilterConfigFactory factory;
-  auto* config = dynamic_cast<envoy::config::filter::network::rbac::v2::RBAC*>(
+  auto* config = dynamic_cast<envoy::extensions::filters::network::rbac::v3::RBAC*>(
       factory.createEmptyConfigProto().get());
   EXPECT_NE(nullptr, config);
 }

@@ -7,11 +7,15 @@
 
 #include "envoy/api/os_sys_calls.h"
 #include "envoy/common/exception.h"
+#include "envoy/common/platform.h"
 #include "envoy/common/pure.h"
+#include "envoy/network/io_handle.h"
 
 #include "common/common/byte_order.h"
 
+#include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/optional.h"
 
 namespace Envoy {
 namespace Buffer {
@@ -22,7 +26,11 @@ namespace Buffer {
 struct RawSlice {
   void* mem_ = nullptr;
   size_t len_ = 0;
+
+  bool operator==(const RawSlice& rhs) const { return mem_ == rhs.mem_ && len_ == rhs.len_; }
 };
+
+using RawSliceVector = absl::InlinedVector<RawSlice, 16>;
 
 /**
  * A wrapper class to facilitate passing in externally owned data to a buffer via addBufferFragment.
@@ -30,6 +38,7 @@ struct RawSlice {
  */
 class BufferFragment {
 public:
+  virtual ~BufferFragment() = default;
   /**
    * @return const void* a pointer to the referenced data.
    */
@@ -41,12 +50,9 @@ public:
   virtual size_t size() const PURE;
 
   /**
-   * Called by a buffer when the refernced data is no longer needed.
+   * Called by a buffer when the referenced data is no longer needed.
    */
   virtual void done() PURE;
-
-protected:
-  virtual ~BufferFragment() {}
 };
 
 /**
@@ -54,10 +60,12 @@ protected:
  */
 class Instance {
 public:
-  virtual ~Instance() {}
+  virtual ~Instance() = default;
 
   /**
-   * Copy data into the buffer.
+   * Copy data into the buffer (deprecated, use absl::string_view variant
+   * instead).
+   * TODO(htuch): Cleanup deprecated call sites.
    * @param data supplies the data address.
    * @param size supplies the data size.
    */
@@ -74,7 +82,7 @@ public:
    * Copy a string into the buffer.
    * @param data supplies the string to copy.
    */
-  virtual void add(const std::string& data) PURE;
+  virtual void add(absl::string_view data) PURE;
 
   /**
    * Copy another buffer into this buffer.
@@ -96,8 +104,10 @@ public:
   virtual void prepend(Instance& data) PURE;
 
   /**
-   * Commit a set of slices originally obtained from reserve(). The number of slices can be
-   * different from the number obtained from reserve(). The size of each slice can also be altered.
+   * Commit a set of slices originally obtained from reserve(). The number of slices should match
+   * the number obtained from reserve(). The size of each slice can also be altered. Commit must
+   * occur once following a reserve() without any mutating operations in between other than to the
+   * iovecs len_ fields.
    * @param iovecs supplies the array of slices to commit.
    * @param num_iovecs supplies the size of the slices array.
    */
@@ -118,21 +128,12 @@ public:
   virtual void drain(uint64_t size) PURE;
 
   /**
-   * Fetch the raw buffer slices. This routine is optimized for performance.
-   * @param out supplies an array of RawSlice objects to fill.
-   * @param out_size supplies the size of out.
-   * @return the actual number of slices needed, which may be greater than out_size. Passing
-   *         nullptr for out and 0 for out_size will just return the size of the array needed
-   *         to capture all of the slice data.
-   * TODO(mattklein123): WARNING: The underlying implementation of this function currently uses
-   * libevent's evbuffer. It has the infuriating property where calling getRawSlices(nullptr, 0)
-   * will return the slices that include all of the buffer data, but not any empty slices at the
-   * end. However, calling getRawSlices(iovec, SOME_CONST), WILL return potentially empty slices
-   * beyond the end of the buffer. Code that is trying to avoid stack overflow by limiting the
-   * number of returned slices needs to deal with this. When we get rid of evbuffer we can rework
-   * all of this.
+   * Fetch the raw buffer slices.
+   * @param max_slices supplies an optional limit on the number of slices to fetch, for performance.
+   * @return RawSliceVector with non-empty slices in the buffer.
    */
-  virtual uint64_t getRawSlices(RawSlice* out, uint64_t out_size) const PURE;
+  virtual RawSliceVector
+  getRawSlices(absl::optional<uint64_t> max_slices = absl::nullopt) const PURE;
 
   /**
    * @return uint64_t the total length of the buffer (not necessarily contiguous in memory).
@@ -159,12 +160,12 @@ public:
 
   /**
    * Read from a file descriptor directly into the buffer.
-   * @param fd supplies the descriptor to read from.
+   * @param io_handle supplies the io handle to read from.
    * @param max_length supplies the maximum length to read.
-   * @return a Api::SysCallIntResult with rc_ = the number of bytes read if successful, or rc_ = -1
-   *   for failure. If the call is successful, errno_ shouldn't be used.
+   * @return a IoCallUint64Result with err_ = nullptr and rc_ = the number of bytes
+   * read if successful, or err_ = some IoError for failure. If call failed, rc_ shouldn't be used.
    */
-  virtual Api::SysCallIntResult read(int fd, uint64_t max_length) PURE;
+  virtual Api::IoCallUint64Result read(Network::IoHandle& io_handle, uint64_t max_length) PURE;
 
   /**
    * Reserve space in the buffer.
@@ -176,13 +177,20 @@ public:
   virtual uint64_t reserve(uint64_t length, RawSlice* iovecs, uint64_t num_iovecs) PURE;
 
   /**
-   * Search for an occurrence of a buffer within the larger buffer.
+   * Search for an occurrence of data within the buffer.
    * @param data supplies the data to search for.
    * @param size supplies the length of the data to search for.
    * @param start supplies the starting index to search from.
    * @return the index where the match starts or -1 if there is no match.
    */
   virtual ssize_t search(const void* data, uint64_t size, size_t start) const PURE;
+
+  /**
+   * Search for an occurrence of data at the start of a buffer.
+   * @param data supplies the data to search for.
+   * @return true if this buffer starts with data, false otherwise.
+   */
+  virtual bool startsWith(absl::string_view data) const PURE;
 
   /**
    * Constructs a flattened string from a buffer.
@@ -192,11 +200,12 @@ public:
 
   /**
    * Write the buffer out to a file descriptor.
-   * @param fd supplies the descriptor to write to.
-   * @return a Api::SysCallIntResult with rc_ = the number of bytes written if successful, or rc_ =
-   * -1 for failure. If the call is successful, errno_ shouldn't be used.
+   * @param io_handle supplies the io_handle to write to.
+   * @return a IoCallUint64Result with err_ = nullptr and rc_ = the number of bytes
+   * written if successful, or err_ = some IoError for failure. If call failed, rc_ shouldn't be
+   * used.
    */
-  virtual Api::SysCallIntResult write(int fd) PURE;
+  virtual Api::IoCallUint64Result write(Network::IoHandle& io_handle) PURE;
 
   /**
    * Copy an integer out of the buffer.
@@ -244,10 +253,14 @@ public:
     constexpr const auto most_significant_read_byte =
         Endianness == ByteOrder::BigEndian ? displacement : Size - 1;
 
+    // If Size == sizeof(T), we need to make sure we don't generate an invalid left shift
+    // (e.g. int32 << 32), even though we know that that branch of the conditional will.
+    // not be taken. Size % sizeof(T) gives us the correct left shift when Size < sizeof(T),
+    // and generates a left shift of 0 bits when Size == sizeof(T)
     const auto sign_extension_bits =
         std::is_signed<T>::value && Size < sizeof(T) && bytes[most_significant_read_byte] < 0
             ? static_cast<T>(static_cast<typename std::make_unsigned<T>::type>(all_bits_enabled)
-                             << (Size * CHAR_BIT))
+                             << ((Size % sizeof(T)) * CHAR_BIT))
             : static_cast<T>(0);
 
     return fromEndianness<Endianness>(static_cast<T>(result)) | sign_extension_bits;
@@ -345,14 +358,14 @@ public:
   }
 };
 
-typedef std::unique_ptr<Instance> InstancePtr;
+using InstancePtr = std::unique_ptr<Instance>;
 
 /**
  * A factory for creating buffers which call callbacks when reaching high and low watermarks.
  */
 class WatermarkFactory {
 public:
-  virtual ~WatermarkFactory() {}
+  virtual ~WatermarkFactory() = default;
 
   /**
    * Creates and returns a unique pointer to a new buffer.
@@ -366,7 +379,7 @@ public:
                              std::function<void()> above_high_watermark) PURE;
 };
 
-typedef std::unique_ptr<WatermarkFactory> WatermarkFactoryPtr;
+using WatermarkFactoryPtr = std::unique_ptr<WatermarkFactory>;
 
 } // namespace Buffer
 } // namespace Envoy

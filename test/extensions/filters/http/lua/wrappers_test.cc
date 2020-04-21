@@ -1,24 +1,26 @@
+#include "envoy/config/core/v3/base.pb.h"
+
 #include "common/http/utility.h"
-#include "common/request_info/request_info_impl.h"
+#include "common/stream_info/stream_info_impl.h"
 
 #include "extensions/filters/http/lua/wrappers.h"
 
 #include "test/extensions/filters/common/lua/lua_wrappers.h"
-#include "test/mocks/request_info/mocks.h"
+#include "test/mocks/stream_info/mocks.h"
 #include "test/test_common/utility.h"
 
 using testing::InSequence;
-using testing::Return;
 using testing::ReturnPointee;
 
 namespace Envoy {
 namespace Extensions {
 namespace HttpFilters {
 namespace Lua {
+namespace {
 
 class LuaHeaderMapWrapperTest : public Filters::Common::Lua::LuaWrappersTestBase<HeaderMapWrapper> {
 public:
-  virtual void setup(const std::string& script) {
+  void setup(const std::string& script) override {
     Filters::Common::Lua::LuaWrappersTestBase<HeaderMapWrapper>::setup(script);
     state_->registerType<HeaderMapIterator>();
   }
@@ -216,11 +218,11 @@ TEST_F(LuaHeaderMapWrapperTest, IteratorAcrossYield) {
                             "[string \"...\"]:5: object used outside of proper scope");
 }
 
-class LuaRequestInfoWrapperTest
-    : public Filters::Common::Lua::LuaWrappersTestBase<RequestInfoWrapper> {
+class LuaStreamInfoWrapperTest
+    : public Filters::Common::Lua::LuaWrappersTestBase<StreamInfoWrapper> {
 public:
-  virtual void setup(const std::string& script) {
-    Filters::Common::Lua::LuaWrappersTestBase<RequestInfoWrapper>::setup(script);
+  void setup(const std::string& script) override {
+    Filters::Common::Lua::LuaWrappersTestBase<StreamInfoWrapper>::setup(script);
     state_->registerType<DynamicMetadataMapWrapper>();
     state_->registerType<DynamicMetadataMapIterator>();
   }
@@ -236,34 +238,34 @@ protected:
     InSequence s;
     setup(SCRIPT);
 
-    NiceMock<Envoy::RequestInfo::MockRequestInfo> request_info;
-    ON_CALL(request_info, protocol()).WillByDefault(ReturnPointee(&protocol));
-    Filters::Common::Lua::LuaDeathRef<RequestInfoWrapper> wrapper(
-        RequestInfoWrapper::create(coroutine_->luaState(), request_info), true);
+    NiceMock<Envoy::StreamInfo::MockStreamInfo> stream_info;
+    ON_CALL(stream_info, protocol()).WillByDefault(ReturnPointee(&protocol));
+    Filters::Common::Lua::LuaDeathRef<StreamInfoWrapper> wrapper(
+        StreamInfoWrapper::create(coroutine_->luaState(), stream_info), true);
     EXPECT_CALL(*this,
                 testPrint(fmt::format("'{}'", Http::Utility::getProtocolString(protocol.value()))));
     start("callMe");
     wrapper.reset();
   }
 
-  envoy::api::v2::core::Metadata parseMetadataFromYaml(const std::string& yaml_string) {
-    envoy::api::v2::core::Metadata metadata;
-    MessageUtil::loadFromYaml(yaml_string, metadata);
+  envoy::config::core::v3::Metadata parseMetadataFromYaml(const std::string& yaml_string) {
+    envoy::config::core::v3::Metadata metadata;
+    TestUtility::loadFromYaml(yaml_string, metadata);
     return metadata;
   }
 
-  DangerousDeprecatedTestTime test_time_;
+  Event::SimulatedTimeSystem test_time_;
 };
 
 // Return the current request protocol.
-TEST_F(LuaRequestInfoWrapperTest, ReturnCurrentProtocol) {
+TEST_F(LuaStreamInfoWrapperTest, ReturnCurrentProtocol) {
   expectToPrintCurrentProtocol(Http::Protocol::Http10);
   expectToPrintCurrentProtocol(Http::Protocol::Http11);
   expectToPrintCurrentProtocol(Http::Protocol::Http2);
 }
 
-// Set, get and iterate request info dynamic metadata.
-TEST_F(LuaRequestInfoWrapperTest, SetGetAndIterateDynamicMetadata) {
+// Set, get and iterate stream info dynamic metadata.
+TEST_F(LuaStreamInfoWrapperTest, SetGetAndIterateDynamicMetadata) {
   const std::string SCRIPT{R"EOF(
       function callMe(object)
         testPrint(type(object:dynamicMetadata()))
@@ -289,10 +291,10 @@ TEST_F(LuaRequestInfoWrapperTest, SetGetAndIterateDynamicMetadata) {
   InSequence s;
   setup(SCRIPT);
 
-  RequestInfo::RequestInfoImpl request_info(Http::Protocol::Http2, test_time_.timeSystem());
-  EXPECT_EQ(0, request_info.dynamicMetadata().filter_metadata_size());
-  Filters::Common::Lua::LuaDeathRef<RequestInfoWrapper> wrapper(
-      RequestInfoWrapper::create(coroutine_->luaState(), request_info), true);
+  StreamInfo::StreamInfoImpl stream_info(Http::Protocol::Http2, test_time_.timeSystem());
+  EXPECT_EQ(0, stream_info.dynamicMetadata().filter_metadata_size());
+  Filters::Common::Lua::LuaDeathRef<StreamInfoWrapper> wrapper(
+      StreamInfoWrapper::create(coroutine_->luaState(), stream_info), true);
   EXPECT_CALL(*this, testPrint("userdata"));
   EXPECT_CALL(*this, testPrint("bar"));
   EXPECT_CALL(*this, testPrint("cool"));
@@ -301,8 +303,8 @@ TEST_F(LuaRequestInfoWrapperTest, SetGetAndIterateDynamicMetadata) {
   EXPECT_CALL(*this, testPrint("0"));
   start("callMe");
 
-  EXPECT_EQ(1, request_info.dynamicMetadata().filter_metadata_size());
-  EXPECT_EQ("bar", request_info.dynamicMetadata()
+  EXPECT_EQ(1, stream_info.dynamicMetadata().filter_metadata_size());
+  EXPECT_EQ("bar", stream_info.dynamicMetadata()
                        .filter_metadata()
                        .at("envoy.lb")
                        .fields()
@@ -311,8 +313,83 @@ TEST_F(LuaRequestInfoWrapperTest, SetGetAndIterateDynamicMetadata) {
   wrapper.reset();
 }
 
+// Set, get complex key/values in stream info dynamic metadata.
+TEST_F(LuaStreamInfoWrapperTest, SetGetComplexDynamicMetadata) {
+  const std::string SCRIPT{R"EOF(
+      function callMe(object)
+        object:dynamicMetadata():set("envoy.lb", "foo", {x=1234, y="baz", z=true})
+        object:dynamicMetadata():set("envoy.lb", "so", {"cool", "and", "dynamic", true})
+
+        testPrint(tostring(object:dynamicMetadata():get("envoy.lb")["foo"].x))
+        testPrint(object:dynamicMetadata():get("envoy.lb")["foo"].y)
+        testPrint(tostring(object:dynamicMetadata():get("envoy.lb")["foo"].z))
+        testPrint(object:dynamicMetadata():get("envoy.lb")["so"][1])
+        testPrint(object:dynamicMetadata():get("envoy.lb")["so"][2])
+        testPrint(object:dynamicMetadata():get("envoy.lb")["so"][3])
+        testPrint(tostring(object:dynamicMetadata():get("envoy.lb")["so"][4]))
+      end
+    )EOF"};
+
+  InSequence s;
+  setup(SCRIPT);
+
+  StreamInfo::StreamInfoImpl stream_info(Http::Protocol::Http2, test_time_.timeSystem());
+  EXPECT_EQ(0, stream_info.dynamicMetadata().filter_metadata_size());
+  Filters::Common::Lua::LuaDeathRef<StreamInfoWrapper> wrapper(
+      StreamInfoWrapper::create(coroutine_->luaState(), stream_info), true);
+  EXPECT_CALL(*this, testPrint("1234"));
+  EXPECT_CALL(*this, testPrint("baz"));
+  EXPECT_CALL(*this, testPrint("true"));
+  EXPECT_CALL(*this, testPrint("cool"));
+  EXPECT_CALL(*this, testPrint("and"));
+  EXPECT_CALL(*this, testPrint("dynamic"));
+  EXPECT_CALL(*this, testPrint("true"));
+  start("callMe");
+
+  EXPECT_EQ(1, stream_info.dynamicMetadata().filter_metadata_size());
+  const ProtobufWkt::Struct& meta_foo = stream_info.dynamicMetadata()
+                                            .filter_metadata()
+                                            .at("envoy.lb")
+                                            .fields()
+                                            .at("foo")
+                                            .struct_value();
+
+  EXPECT_EQ(1234.0, meta_foo.fields().at("x").number_value());
+  EXPECT_EQ("baz", meta_foo.fields().at("y").string_value());
+  EXPECT_EQ(true, meta_foo.fields().at("z").bool_value());
+
+  const ProtobufWkt::ListValue& meta_so =
+      stream_info.dynamicMetadata().filter_metadata().at("envoy.lb").fields().at("so").list_value();
+
+  EXPECT_EQ(4, meta_so.values_size());
+  EXPECT_EQ("cool", meta_so.values(0).string_value());
+  EXPECT_EQ("and", meta_so.values(1).string_value());
+  EXPECT_EQ("dynamic", meta_so.values(2).string_value());
+  EXPECT_EQ(true, meta_so.values(3).bool_value());
+
+  wrapper.reset();
+}
+
+// Bad types in table
+TEST_F(LuaStreamInfoWrapperTest, BadTypesInTableForDynamicMetadata) {
+  const std::string SCRIPT{R"EOF(
+    function callMe(object)
+      object:dynamicMetadata():set("envoy.lb", "hello", {x="world", y=function(a, b) end})
+    end
+  )EOF"};
+
+  InSequence s;
+  setup(SCRIPT);
+
+  StreamInfo::StreamInfoImpl stream_info(Http::Protocol::Http2, test_time_.timeSystem());
+  Filters::Common::Lua::LuaDeathRef<StreamInfoWrapper> wrapper(
+      StreamInfoWrapper::create(coroutine_->luaState(), stream_info), true);
+  EXPECT_THROW_WITH_MESSAGE(start("callMe"), Filters::Common::Lua::LuaException,
+                            "[string \"...\"]:3: unexpected type 'function' in dynamicMetadata");
+}
+
 // Modify during iteration.
-TEST_F(LuaRequestInfoWrapperTest, ModifyDuringIterationForDynamicMetadata) {
+TEST_F(LuaStreamInfoWrapperTest, ModifyDuringIterationForDynamicMetadata) {
   const std::string SCRIPT{R"EOF(
     function callMe(object)
       object:dynamicMetadata():set("envoy.lb", "hello", "world")
@@ -325,16 +402,16 @@ TEST_F(LuaRequestInfoWrapperTest, ModifyDuringIterationForDynamicMetadata) {
   InSequence s;
   setup(SCRIPT);
 
-  RequestInfo::RequestInfoImpl request_info(Http::Protocol::Http2, test_time_.timeSystem());
-  Filters::Common::Lua::LuaDeathRef<RequestInfoWrapper> wrapper(
-      RequestInfoWrapper::create(coroutine_->luaState(), request_info), true);
+  StreamInfo::StreamInfoImpl stream_info(Http::Protocol::Http2, test_time_.timeSystem());
+  Filters::Common::Lua::LuaDeathRef<StreamInfoWrapper> wrapper(
+      StreamInfoWrapper::create(coroutine_->luaState(), stream_info), true);
   EXPECT_THROW_WITH_MESSAGE(
       start("callMe"), Filters::Common::Lua::LuaException,
       "[string \"...\"]:5: dynamic metadata map cannot be modified while iterating");
 }
 
 // Modify after iteration.
-TEST_F(LuaRequestInfoWrapperTest, ModifyAfterIterationForDynamicMetadata) {
+TEST_F(LuaStreamInfoWrapperTest, ModifyAfterIterationForDynamicMetadata) {
   const std::string SCRIPT{R"EOF(
     function callMe(object)
       object:dynamicMetadata():set("envoy.lb", "hello", "world")
@@ -359,10 +436,10 @@ TEST_F(LuaRequestInfoWrapperTest, ModifyAfterIterationForDynamicMetadata) {
   InSequence s;
   setup(SCRIPT);
 
-  RequestInfo::RequestInfoImpl request_info(Http::Protocol::Http2, test_time_.timeSystem());
-  EXPECT_EQ(0, request_info.dynamicMetadata().filter_metadata_size());
-  Filters::Common::Lua::LuaDeathRef<RequestInfoWrapper> wrapper(
-      RequestInfoWrapper::create(coroutine_->luaState(), request_info), true);
+  StreamInfo::StreamInfoImpl stream_info(Http::Protocol::Http2, test_time_.timeSystem());
+  EXPECT_EQ(0, stream_info.dynamicMetadata().filter_metadata_size());
+  Filters::Common::Lua::LuaDeathRef<StreamInfoWrapper> wrapper(
+      StreamInfoWrapper::create(coroutine_->luaState(), stream_info), true);
   EXPECT_CALL(*this, testPrint("envoy.lb"));
   EXPECT_CALL(*this, testPrint("'hello' 'world'"));
   EXPECT_CALL(*this, testPrint("envoy.proxy"));
@@ -373,7 +450,7 @@ TEST_F(LuaRequestInfoWrapperTest, ModifyAfterIterationForDynamicMetadata) {
 }
 
 // Don't finish iteration.
-TEST_F(LuaRequestInfoWrapperTest, DontFinishIterationForDynamicMetadata) {
+TEST_F(LuaStreamInfoWrapperTest, DontFinishIterationForDynamicMetadata) {
   const std::string SCRIPT{R"EOF(
     function callMe(object)
       object:dynamicMetadata():set("envoy.lb", "foo", "bar")
@@ -386,14 +463,15 @@ TEST_F(LuaRequestInfoWrapperTest, DontFinishIterationForDynamicMetadata) {
   InSequence s;
   setup(SCRIPT);
 
-  RequestInfo::RequestInfoImpl request_info(Http::Protocol::Http2, test_time_.timeSystem());
-  Filters::Common::Lua::LuaDeathRef<RequestInfoWrapper> wrapper(
-      RequestInfoWrapper::create(coroutine_->luaState(), request_info), true);
+  StreamInfo::StreamInfoImpl stream_info(Http::Protocol::Http2, test_time_.timeSystem());
+  Filters::Common::Lua::LuaDeathRef<StreamInfoWrapper> wrapper(
+      StreamInfoWrapper::create(coroutine_->luaState(), stream_info), true);
   EXPECT_THROW_WITH_MESSAGE(
       start("callMe"), Filters::Common::Lua::LuaException,
       "[string \"...\"]:6: cannot create a second iterator before completing the first");
 }
 
+} // namespace
 } // namespace Lua
 } // namespace HttpFilters
 } // namespace Extensions

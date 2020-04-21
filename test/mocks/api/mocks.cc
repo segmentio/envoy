@@ -7,41 +7,36 @@
 #include "gtest/gtest.h"
 
 using testing::_;
-using testing::Return;
+using testing::Invoke;
 
 namespace Envoy {
 namespace Api {
 
-MockApi::MockApi() { ON_CALL(*this, createFile(_, _, _, _)).WillByDefault(Return(file_)); }
-
-MockApi::~MockApi() {}
-
-MockOsSysCalls::MockOsSysCalls() { num_writes_ = num_open_ = 0; }
-
-MockOsSysCalls::~MockOsSysCalls() {}
-
-SysCallIntResult MockOsSysCalls::open(const std::string& full_path, int flags, int mode) {
-  Thread::LockGuard lock(open_mutex_);
-
-  int rc = open_(full_path, flags, mode);
-  num_open_++;
-  open_event_.notifyOne();
-
-  return SysCallIntResult{rc, errno};
+MockApi::MockApi() {
+  ON_CALL(*this, fileSystem()).WillByDefault(ReturnRef(file_system_));
+  ON_CALL(*this, rootScope()).WillByDefault(ReturnRef(stats_store_));
 }
 
-SysCallSizeResult MockOsSysCalls::write(int fd, const void* buffer, size_t num_bytes) {
-  Thread::LockGuard lock(write_mutex_);
+MockApi::~MockApi() = default;
 
-  ssize_t rc = write_(fd, buffer, num_bytes);
-  num_writes_++;
-  write_event_.notifyOne();
-
-  return SysCallSizeResult{rc, errno};
+Event::DispatcherPtr MockApi::allocateDispatcher() {
+  return Event::DispatcherPtr{allocateDispatcher_(time_system_)};
+}
+Event::DispatcherPtr MockApi::allocateDispatcher(Buffer::WatermarkFactoryPtr&& watermark_factory) {
+  return Event::DispatcherPtr{allocateDispatcher_(std::move(watermark_factory), time_system_)};
 }
 
-SysCallIntResult MockOsSysCalls::setsockopt(int sockfd, int level, int optname, const void* optval,
-                                            socklen_t optlen) {
+MockOsSysCalls::MockOsSysCalls() {
+  ON_CALL(*this, close(_)).WillByDefault(Invoke([](os_fd_t fd) {
+    const int rc = ::close(fd);
+    return SysCallIntResult{rc, errno};
+  }));
+}
+
+MockOsSysCalls::~MockOsSysCalls() = default;
+
+SysCallIntResult MockOsSysCalls::setsockopt(os_fd_t sockfd, int level, int optname,
+                                            const void* optval, socklen_t optlen) {
   ASSERT(optlen == sizeof(int));
 
   // Allow mocking system call failure.
@@ -53,7 +48,7 @@ SysCallIntResult MockOsSysCalls::setsockopt(int sockfd, int level, int optname, 
   return SysCallIntResult{0, 0};
 };
 
-SysCallIntResult MockOsSysCalls::getsockopt(int sockfd, int level, int optname, void* optval,
+SysCallIntResult MockOsSysCalls::getsockopt(os_fd_t sockfd, int level, int optname, void* optval,
                                             socklen_t* optlen) {
   ASSERT(*optlen == sizeof(int));
   int val = 0;

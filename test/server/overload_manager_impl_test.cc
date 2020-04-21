@@ -1,3 +1,4 @@
+#include "envoy/config/overload/v3/overload.pb.h"
 #include "envoy/server/resource_monitor.h"
 #include "envoy/server/resource_monitor_config.h"
 
@@ -7,7 +8,9 @@
 
 #include "extensions/resource_monitors/common/factory_base.h"
 
+#include "test/common/stats/stat_test_utility.h"
 #include "test/mocks/event/mocks.h"
+#include "test/mocks/protobuf/mocks.h"
 #include "test/mocks/thread_local/mocks.h"
 #include "test/test_common/registry.h"
 #include "test/test_common/utility.h"
@@ -53,20 +56,27 @@ private:
   Event::Dispatcher& dispatcher_;
 };
 
-class FakeResourceMonitorFactory
-    : public Extensions::ResourceMonitors::Common::EmptyConfigFactoryBase {
+template <class ConfigType>
+class FakeResourceMonitorFactory : public Server::Configuration::ResourceMonitorFactory {
 public:
-  FakeResourceMonitorFactory(const std::string& name)
-      : EmptyConfigFactoryBase(name), monitor_(nullptr) {}
+  FakeResourceMonitorFactory(const std::string& name) : monitor_(nullptr), name_(name) {}
 
-  ResourceMonitorPtr createEmptyConfigResourceMonitor(
-      Server::Configuration::ResourceMonitorFactoryContext& context) override {
+  Server::ResourceMonitorPtr
+  createResourceMonitor(const Protobuf::Message&,
+                        Server::Configuration::ResourceMonitorFactoryContext& context) override {
     auto monitor = std::make_unique<FakeResourceMonitor>(context.dispatcher());
     monitor_ = monitor.get();
-    return std::move(monitor);
+    return monitor;
   }
 
+  ProtobufTypes::MessagePtr createEmptyConfigProto() override {
+    return ProtobufTypes::MessagePtr{new ConfigType()};
+  }
+
+  std::string name() const override { return name_; }
+
   FakeResourceMonitor* monitor_; // not owned
+  const std::string name_;
 };
 
 class OverloadManagerImplTest : public testing::Test {
@@ -74,17 +84,18 @@ protected:
   OverloadManagerImplTest()
       : factory1_("envoy.resource_monitors.fake_resource1"),
         factory2_("envoy.resource_monitors.fake_resource2"), register_factory1_(factory1_),
-        register_factory2_(factory2_) {}
+        register_factory2_(factory2_), api_(Api::createApiForTest(stats_)) {}
 
   void setDispatcherExpectation() {
+    timer_ = new NiceMock<Event::MockTimer>();
     EXPECT_CALL(dispatcher_, createTimer_(_)).WillOnce(Invoke([&](Event::TimerCb cb) {
       timer_cb_ = cb;
-      return new NiceMock<Event::MockTimer>();
+      return timer_;
     }));
   }
 
-  envoy::config::overload::v2alpha::OverloadManager parseConfig(const std::string& config) {
-    envoy::config::overload::v2alpha::OverloadManager proto;
+  envoy::config::overload::v3::OverloadManager parseConfig(const std::string& config) {
+    envoy::config::overload::v3::OverloadManager proto;
     bool success = Protobuf::TextFormat::ParseFromString(config, &proto);
     ASSERT(success);
     return proto;
@@ -121,17 +132,20 @@ protected:
 
   std::unique_ptr<OverloadManagerImpl> createOverloadManager(const std::string& config) {
     return std::make_unique<OverloadManagerImpl>(dispatcher_, stats_, thread_local_,
-                                                 parseConfig(config));
+                                                 parseConfig(config), validation_visitor_, *api_);
   }
 
-  FakeResourceMonitorFactory factory1_;
-  FakeResourceMonitorFactory factory2_;
+  FakeResourceMonitorFactory<Envoy::ProtobufWkt::Struct> factory1_;
+  FakeResourceMonitorFactory<Envoy::ProtobufWkt::Timestamp> factory2_;
   Registry::InjectFactory<Configuration::ResourceMonitorFactory> register_factory1_;
   Registry::InjectFactory<Configuration::ResourceMonitorFactory> register_factory2_;
   NiceMock<Event::MockDispatcher> dispatcher_;
-  Stats::IsolatedStoreImpl stats_;
+  NiceMock<Event::MockTimer>* timer_; // not owned
+  Stats::TestUtil::TestStore stats_;
   NiceMock<ThreadLocal::MockInstance> thread_local_;
   Event::TimerCb timer_cb_;
+  NiceMock<ProtobufMessage::MockValidationVisitor> validation_visitor_;
+  Api::ApiPtr api_;
 };
 
 TEST_F(OverloadManagerImplTest, CallbackOnlyFiresWhenStateChanges) {
@@ -149,11 +163,14 @@ TEST_F(OverloadManagerImplTest, CallbackOnlyFiresWhenStateChanges) {
                              [&](OverloadActionState) { EXPECT_TRUE(false); });
   manager->start();
 
-  Stats::Gauge& active_gauge = stats_.gauge("overload.envoy.overload_actions.dummy_action.active");
+  Stats::Gauge& active_gauge = stats_.gauge("overload.envoy.overload_actions.dummy_action.active",
+                                            Stats::Gauge::ImportMode::Accumulate);
   Stats::Gauge& pressure_gauge1 =
-      stats_.gauge("overload.envoy.resource_monitors.fake_resource1.pressure");
+      stats_.gauge("overload.envoy.resource_monitors.fake_resource1.pressure",
+                   Stats::Gauge::ImportMode::NeverImport);
   Stats::Gauge& pressure_gauge2 =
-      stats_.gauge("overload.envoy.resource_monitors.fake_resource2.pressure");
+      stats_.gauge("overload.envoy.resource_monitors.fake_resource2.pressure",
+                   Stats::Gauge::ImportMode::NeverImport);
   const OverloadActionState& action_state =
       manager->getThreadLocalOverloadState().getState("envoy.overload_actions.dummy_action");
 
@@ -198,6 +215,8 @@ TEST_F(OverloadManagerImplTest, CallbackOnlyFiresWhenStateChanges) {
   EXPECT_EQ(2, cb_count);
   EXPECT_EQ(0, active_gauge.value());
   EXPECT_EQ(40, pressure_gauge2.value());
+
+  manager->stop();
 }
 
 TEST_F(OverloadManagerImplTest, FailedUpdates) {
@@ -212,6 +231,8 @@ TEST_F(OverloadManagerImplTest, FailedUpdates) {
   EXPECT_EQ(1, failed_updates.value());
   timer_cb_();
   EXPECT_EQ(2, failed_updates.value());
+
+  manager->stop();
 }
 
 TEST_F(OverloadManagerImplTest, SkippedUpdates) {
@@ -235,6 +256,8 @@ TEST_F(OverloadManagerImplTest, SkippedUpdates) {
   post_cb();
   timer_cb_();
   EXPECT_EQ(2, skipped_updates.value());
+
+  manager->stop();
 }
 
 TEST_F(OverloadManagerImplTest, DuplicateResourceMonitor) {
@@ -306,6 +329,17 @@ TEST_F(OverloadManagerImplTest, DuplicateTrigger) {
 
   EXPECT_THROW_WITH_REGEX(createOverloadManager(config), EnvoyException, "Duplicate trigger .*");
 }
+
+TEST_F(OverloadManagerImplTest, Shutdown) {
+  setDispatcherExpectation();
+
+  auto manager(createOverloadManager(getConfig()));
+  manager->start();
+
+  EXPECT_CALL(*timer_, disableTimer());
+  manager->stop();
+}
+
 } // namespace
 } // namespace Server
 } // namespace Envoy

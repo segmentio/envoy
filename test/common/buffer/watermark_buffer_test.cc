@@ -2,6 +2,9 @@
 
 #include "common/buffer/buffer_impl.h"
 #include "common/buffer/watermark_buffer.h"
+#include "common/network/io_socket_handle_impl.h"
+
+#include "test/common/buffer/utility.h"
 
 #include "gtest/gtest.h"
 
@@ -131,8 +134,8 @@ TEST_F(WatermarkBufferTest, Drain) {
 
   // Go above the high watermark then drain down to just at the low watermark.
   buffer_.add(TEN_BYTES, 11);
-  buffer_.drain(6);
-  EXPECT_EQ(5, buffer_.length());
+  buffer_.drain(5);
+  EXPECT_EQ(6, buffer_.length());
   EXPECT_EQ(0, times_low_watermark_called_);
 
   // Now drain below.
@@ -141,6 +144,33 @@ TEST_F(WatermarkBufferTest, Drain) {
 
   // Going back above should trigger the high again
   buffer_.add(TEN_BYTES, 10);
+  EXPECT_EQ(2, times_high_watermark_called_);
+}
+
+// Verify that low watermark callback is called on drain in the case where the
+// high watermark is non-zero and low watermark is 0.
+TEST_F(WatermarkBufferTest, DrainWithLowWatermarkOfZero) {
+  buffer_.setWatermarks(0, 10);
+
+  // Draining from above to below the low watermark does nothing if the high
+  // watermark never got hit.
+  buffer_.add(TEN_BYTES, 10);
+  buffer_.drain(10);
+  EXPECT_EQ(0, times_high_watermark_called_);
+  EXPECT_EQ(0, times_low_watermark_called_);
+
+  // Go above the high watermark then drain down to just above the low watermark.
+  buffer_.add(TEN_BYTES, 11);
+  buffer_.drain(10);
+  EXPECT_EQ(1, buffer_.length());
+  EXPECT_EQ(0, times_low_watermark_called_);
+
+  // Now drain below.
+  buffer_.drain(1);
+  EXPECT_EQ(1, times_low_watermark_called_);
+
+  // Going back above should trigger the high again
+  buffer_.add(TEN_BYTES, 11);
   EXPECT_EQ(2, times_high_watermark_called_);
 }
 
@@ -168,7 +198,7 @@ TEST_F(WatermarkBufferTest, MoveOneByte) {
 }
 
 TEST_F(WatermarkBufferTest, WatermarkFdFunctions) {
-  int pipe_fds[2] = {0, 0};
+  os_fd_t pipe_fds[2] = {0, 0};
   ASSERT_EQ(0, pipe(pipe_fds));
 
   buffer_.add(TEN_BYTES, 10);
@@ -177,10 +207,11 @@ TEST_F(WatermarkBufferTest, WatermarkFdFunctions) {
   EXPECT_EQ(0, times_low_watermark_called_);
 
   int bytes_written_total = 0;
+  Network::IoSocketHandleImpl io_handle1(pipe_fds[1]);
   while (bytes_written_total < 20) {
-    Api::SysCallIntResult result = buffer_.write(pipe_fds[1]);
-    if (result.rc_ < 0) {
-      ASSERT_EQ(EAGAIN, result.errno_);
+    Api::IoCallUint64Result result = buffer_.write(io_handle1);
+    if (!result.ok()) {
+      ASSERT_EQ(Api::IoError::IoErrorCode::Again, result.err_->getErrorCode());
     } else {
       bytes_written_total += result.rc_;
     }
@@ -190,8 +221,9 @@ TEST_F(WatermarkBufferTest, WatermarkFdFunctions) {
   EXPECT_EQ(0, buffer_.length());
 
   int bytes_read_total = 0;
+  Network::IoSocketHandleImpl io_handle2(pipe_fds[0]);
   while (bytes_read_total < 20) {
-    Api::SysCallIntResult result = buffer_.read(pipe_fds[0], 20);
+    Api::IoCallUint64Result result = buffer_.read(io_handle2, 20);
     bytes_read_total += result.rc_;
   }
   EXPECT_EQ(2, times_high_watermark_called_);
@@ -206,12 +238,13 @@ TEST_F(WatermarkBufferTest, MoveWatermarks) {
   buffer_.setWatermarks(1, 8);
   EXPECT_EQ(1, times_high_watermark_called_);
 
-  buffer_.setWatermarks(9, 20);
-  EXPECT_EQ(0, times_low_watermark_called_);
-  buffer_.setWatermarks(10, 20);
-  EXPECT_EQ(1, times_low_watermark_called_);
   buffer_.setWatermarks(8, 20);
-  buffer_.setWatermarks(10, 20);
+  EXPECT_EQ(0, times_low_watermark_called_);
+  buffer_.setWatermarks(9, 20);
+  EXPECT_EQ(1, times_low_watermark_called_);
+  buffer_.setWatermarks(7, 20);
+  EXPECT_EQ(1, times_low_watermark_called_);
+  buffer_.setWatermarks(9, 20);
   EXPECT_EQ(1, times_low_watermark_called_);
 
   EXPECT_EQ(1, times_high_watermark_called_);
@@ -219,14 +252,23 @@ TEST_F(WatermarkBufferTest, MoveWatermarks) {
   EXPECT_EQ(2, times_high_watermark_called_);
   EXPECT_EQ(1, times_low_watermark_called_);
   buffer_.setWatermarks(0);
+  EXPECT_EQ(2, times_high_watermark_called_);
   EXPECT_EQ(2, times_low_watermark_called_);
+  buffer_.setWatermarks(1);
+  EXPECT_EQ(3, times_high_watermark_called_);
+  EXPECT_EQ(2, times_low_watermark_called_);
+
+  // Fully drain the buffer.
+  buffer_.drain(9);
+  EXPECT_EQ(3, times_low_watermark_called_);
+  EXPECT_EQ(0, buffer_.length());
 }
 
 TEST_F(WatermarkBufferTest, GetRawSlices) {
   buffer_.add(TEN_BYTES, 10);
 
-  RawSlice slices[2];
-  ASSERT_EQ(1, buffer_.getRawSlices(&slices[0], 2));
+  RawSliceVector slices = buffer_.getRawSlices(/*max_slices=*/2);
+  ASSERT_EQ(1, slices.size());
   EXPECT_EQ(10, slices[0].len_);
   EXPECT_EQ(0, memcmp(slices[0].mem_, &TEN_BYTES[0], 10));
 
@@ -240,6 +282,14 @@ TEST_F(WatermarkBufferTest, Search) {
   EXPECT_EQ(1, buffer_.search(&TEN_BYTES[1], 2, 0));
 
   EXPECT_EQ(-1, buffer_.search(&TEN_BYTES[1], 2, 5));
+}
+
+TEST_F(WatermarkBufferTest, StartsWith) {
+  buffer_.add(TEN_BYTES, 10);
+
+  EXPECT_TRUE(buffer_.startsWith({TEN_BYTES, 2}));
+  EXPECT_TRUE(buffer_.startsWith({TEN_BYTES, 10}));
+  EXPECT_FALSE(buffer_.startsWith({&TEN_BYTES[1], 2}));
 }
 
 TEST_F(WatermarkBufferTest, MoveBackWithWatermarks) {

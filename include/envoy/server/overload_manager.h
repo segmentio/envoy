@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <unordered_map>
 
 #include "envoy/common/pure.h"
@@ -25,7 +26,7 @@ enum class OverloadActionState {
 /**
  * Callback invoked when an overload action changes state.
  */
-typedef std::function<void(OverloadActionState)> OverloadActionCb;
+using OverloadActionCb = std::function<void(OverloadActionState)>;
 
 /**
  * Thread-local copy of the state of each configured overload action.
@@ -58,14 +59,20 @@ private:
  */
 class OverloadActionNameValues {
 public:
-  // Overload action to stop accepting new requests.
+  // Overload action to stop accepting new HTTP requests.
   const std::string StopAcceptingRequests = "envoy.overload_actions.stop_accepting_requests";
 
   // Overload action to disable http keepalive (for HTTP1.x).
   const std::string DisableHttpKeepAlive = "envoy.overload_actions.disable_http_keepalive";
+
+  // Overload action to stop accepting new connections.
+  const std::string StopAcceptingConnections = "envoy.overload_actions.stop_accepting_connections";
+
+  // Overload action to try to shrink the heap by releasing free memory.
+  const std::string ShrinkHeap = "envoy.overload_actions.shrink_heap";
 };
 
-typedef ConstSingleton<OverloadActionNameValues> OverloadActionNames;
+using OverloadActionNames = ConstSingleton<OverloadActionNameValues>;
 
 /**
  * The OverloadManager protects the Envoy instance from being overwhelmed by client
@@ -74,7 +81,7 @@ typedef ConstSingleton<OverloadActionNameValues> OverloadActionNames;
  */
 class OverloadManager {
 public:
-  virtual ~OverloadManager() {}
+  virtual ~OverloadManager() = default;
 
   /**
    * Start a recurring timer to monitor resources and notify listeners when overload actions
@@ -84,13 +91,14 @@ public:
 
   /**
    * Register a callback to be invoked when the specified overload action changes state
-   * (ie. becomes activated or inactivated). Must be called before the start method is called.
+   * (i.e., becomes activated or inactivated). Must be called before the start method is called.
    * @param action const std::string& the name of the overload action to register for
    * @param dispatcher Event::Dispatcher& the dispatcher on which callbacks will be posted
    * @param callback OverloadActionCb the callback to post when the overload action
    *        changes state
+   * @returns true if action was registered and false if no such action has been configured
    */
-  virtual void registerForAction(const std::string& action, Event::Dispatcher& dispatcher,
+  virtual bool registerForAction(const std::string& action, Event::Dispatcher& dispatcher,
                                  OverloadActionCb callback) PURE;
 
   /**

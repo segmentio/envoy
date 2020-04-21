@@ -10,18 +10,18 @@ namespace Envoy {
 namespace Extensions {
 namespace TransportSockets {
 namespace Alts {
+namespace {
 
 using testing::_;
 using testing::InSequence;
 using testing::Invoke;
 using testing::NiceMock;
 using testing::SaveArg;
-using testing::Test;
 
 class MockTsiHandshakerCallbacks : public TsiHandshakerCallbacks {
 public:
   void onNextDone(NextResultPtr&& result) override { onNextDone_(result.get()); }
-  MOCK_METHOD1(onNextDone_, void(NextResult*));
+  MOCK_METHOD(void, onNextDone_, (NextResult*));
 
   void expectDone(tsi_result status, Buffer::Instance& to_send, CHandshakerResultPtr& result) {
     EXPECT_CALL(*this, onNextDone_(_))
@@ -33,7 +33,7 @@ public:
   }
 };
 
-class TsiHandshakerTest : public Test {
+class TsiHandshakerTest : public testing::Test {
 public:
   TsiHandshakerTest()
       : server_handshaker_({tsi_create_fake_handshaker(0)}, dispatcher_),
@@ -164,6 +164,7 @@ TEST_F(TsiHandshakerTest, DeleteOnDone) {
   handshaker.release();
 }
 
+} // namespace
 } // namespace Alts
 } // namespace TransportSockets
 } // namespace Extensions

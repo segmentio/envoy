@@ -1,12 +1,16 @@
 #pragma once
 
 #include <array>
+#include <chrono>
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "envoy/common/pure.h"
 #include "envoy/ssl/certificate_validation_context_config.h"
 #include "envoy/ssl/tls_certificate_config.h"
+
+#include "absl/types/optional.h"
 
 namespace Envoy {
 namespace Ssl {
@@ -16,7 +20,7 @@ namespace Ssl {
  */
 class ContextConfig {
 public:
-  virtual ~ContextConfig() {}
+  virtual ~ContextConfig() = default;
 
   /**
    * The list of supported protocols exposed via ALPN. Client connections will send these
@@ -24,11 +28,6 @@ public:
    * protocol if the client supports ALPN.
    */
   virtual const std::string& alpnProtocols() const PURE;
-
-  /**
-   * The alternate list of ALPN protocols served via kill switch. @see alpnProtocols().
-   */
-  virtual const std::string& altAlpnProtocols() const PURE;
 
   /**
    * The ':' delimited list of supported cipher suites
@@ -41,9 +40,11 @@ public:
   virtual const std::string& ecdhCurves() const PURE;
 
   /**
-   * @return TlsCertificateConfig the certificate config used to identify the local side.
+   * @return std::vector<std::reference_wrapper<const TlsCertificateConfig>> TLS
+   * certificate configs.
    */
-  virtual const TlsCertificateConfig* tlsCertificate() const PURE;
+  virtual std::vector<std::reference_wrapper<const TlsCertificateConfig>>
+  tlsCertificates() const PURE;
 
   /**
    * @return CertificateValidationContextConfig the certificate validation context config.
@@ -86,9 +87,22 @@ public:
    * @return true if server-initiated TLS renegotiation will be allowed.
    */
   virtual bool allowRenegotiation() const PURE;
+
+  /**
+   * @return The maximum number of session keys to store.
+   */
+  virtual size_t maxSessionKeys() const PURE;
+
+  /**
+   * @return const std::string& with the signature algorithms for the context.
+   *         This is a :-delimited list of algorithms, see
+   *         https://tools.ietf.org/id/draft-ietf-tls-tls13-21.html#rfc.section.4.2.3
+   *         for names.
+   */
+  virtual const std::string& signingAlgorithmsForTest() const PURE;
 };
 
-typedef std::unique_ptr<ClientContextConfig> ClientContextConfigPtr;
+using ClientContextConfigPtr = std::unique_ptr<ClientContextConfig>;
 
 class ServerContextConfig : public virtual ContextConfig {
 public:
@@ -109,9 +123,20 @@ public:
    * are candidates for decrypting received tickets.
    */
   virtual const std::vector<SessionTicketKey>& sessionTicketKeys() const PURE;
+
+  /**
+   * @return timeout in seconds for the session.
+   * Session timeout is used to specify lifetime hint of tls tickets.
+   */
+  virtual absl::optional<std::chrono::seconds> sessionTimeout() const PURE;
+
+  /**
+   * @return True if stateless TLS session resumption is disabled, false otherwise.
+   */
+  virtual bool disableStatelessSessionResumption() const PURE;
 };
 
-typedef std::unique_ptr<ServerContextConfig> ServerContextConfigPtr;
+using ServerContextConfigPtr = std::unique_ptr<ServerContextConfig>;
 
 } // namespace Ssl
 } // namespace Envoy

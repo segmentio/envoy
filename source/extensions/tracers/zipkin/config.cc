@@ -1,5 +1,7 @@
 #include "extensions/tracers/zipkin/config.h"
 
+#include "envoy/config/trace/v3/trace.pb.h"
+#include "envoy/config/trace/v3/trace.pb.validate.h"
 #include "envoy/registry/registry.h"
 
 #include "common/common/utility.h"
@@ -13,35 +15,25 @@ namespace Extensions {
 namespace Tracers {
 namespace Zipkin {
 
-Tracing::HttpTracerPtr
-ZipkinTracerFactory::createHttpTracer(const envoy::config::trace::v2::Tracing& configuration,
-                                      Server::Instance& server) {
+ZipkinTracerFactory::ZipkinTracerFactory() : FactoryBase(TracerNames::get().Zipkin) {}
 
-  Envoy::Runtime::RandomGenerator& rand = server.random();
-  ProtobufTypes::MessagePtr config_ptr = createEmptyConfigProto();
+Tracing::HttpTracerSharedPtr ZipkinTracerFactory::createHttpTracerTyped(
+    const envoy::config::trace::v3::ZipkinConfig& proto_config,
+    Server::Configuration::TracerFactoryContext& context) {
+  Tracing::DriverPtr zipkin_driver = std::make_unique<Zipkin::Driver>(
+      proto_config, context.serverFactoryContext().clusterManager(),
+      context.serverFactoryContext().scope(), context.serverFactoryContext().threadLocal(),
+      context.serverFactoryContext().runtime(), context.serverFactoryContext().localInfo(),
+      context.serverFactoryContext().random(), context.serverFactoryContext().timeSource());
 
-  if (configuration.http().has_config()) {
-    MessageUtil::jsonConvert(configuration.http().config(), *config_ptr);
-  }
-
-  const auto& zipkin_config =
-      dynamic_cast<const envoy::config::trace::v2::ZipkinConfig&>(*config_ptr);
-
-  Tracing::DriverPtr zipkin_driver{std::make_unique<Zipkin::Driver>(
-      zipkin_config, server.clusterManager(), server.stats(), server.threadLocal(),
-      server.runtime(), server.localInfo(), rand, server.timeSystem())};
-
-  return Tracing::HttpTracerPtr(
-      new Tracing::HttpTracerImpl(std::move(zipkin_driver), server.localInfo()));
+  return std::make_shared<Tracing::HttpTracerImpl>(std::move(zipkin_driver),
+                                                   context.serverFactoryContext().localInfo());
 }
 
-std::string ZipkinTracerFactory::name() { return TracerNames::get().Zipkin; }
-
 /**
- * Static registration for the lightstep tracer. @see RegisterFactory.
+ * Static registration for the Zipkin tracer. @see RegisterFactory.
  */
-static Registry::RegisterFactory<ZipkinTracerFactory, Server::Configuration::TracerFactory>
-    register_;
+REGISTER_FACTORY(ZipkinTracerFactory, Server::Configuration::TracerFactory){"envoy.zipkin"};
 
 } // namespace Zipkin
 } // namespace Tracers
